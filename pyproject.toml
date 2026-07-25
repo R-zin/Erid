@@ -1,0 +1,8 @@
+[project]
+name = "erid"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.140.0",
+    "sqlalchemy>=2.0.51",
+]

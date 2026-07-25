@@ -55,7 +55,7 @@ class Decision(Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(String(512))
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    related_files: Mapped[str | None] = mapped_column(Text, nullable=True)  # comma-separated for MVP
+    related_files: Mapped[str | None] = mapped_column(Text, nullable=True)
     made_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -63,14 +63,12 @@ class Decision(Base):
 
 
 class Presence(Base):
-    """Tracks the last-known activity of a developer or AI agent in a workspace."""
-
     __tablename__ = "presence"
 
     id: Mapped[uuid.UUID] = uuid_pk()
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
     actor_name: Mapped[str] = mapped_column(String(128))
-    actor_type: Mapped[str] = mapped_column(String(32), default="human")  # "human" | "ai"
+    actor_type: Mapped[str] = mapped_column(String(32), default="human")
     current_file: Mapped[str | None] = mapped_column(String(512), nullable=True)
     current_task: Mapped[str | None] = mapped_column(String(512), nullable=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

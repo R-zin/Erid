@@ -1,0 +1,4 @@
+mcp:
+  context-hub:
+    command: python3
+    args: [mcp-server/src/server.py, --transport, stdio]

@@ -1,146 +1,216 @@
+"""Chunked large-repository analysis via NVIDIA NIM.
+
+Scans the repo, packs source files into token-bounded chunks, asks the model to
+review each chunk, then synthesizes a single report. Written for GitHub Actions
+(see .github/workflows/repo_analysis_large.yml) but runnable locally:
+
+    NVIDIA_API_KEY=... uv run python .github/scripts/analyze_repo_large.py
+
+Configuration is via environment variables so behaviour can be tuned without
+editing code:
+
+    NVIDIA_API_KEY   (required) NIM API key.
+    NIM_BASE_URL     default https://integrate.api.nvidia.com/v1
+    NIM_MODEL        default z-ai/glm-5.2
+    NIM_MAX_CHUNKS   default 15 (safety cap on huge repos)
+    NIM_MAX_FILE_KB  default 100 (skip oversized files)
+    NIM_TIMEOUT_S    default 120 (per-request timeout)
+"""
+
+import argparse
 import os
 import sys
 import time
-import math
+from dataclasses import dataclass
 from pathlib import Path
-from openai import OpenAI
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
-BASE_URL = "https://integrate.api.nvidia.com/v1"
-MODEL = "z-ai/glm-5.2"
+from openai import APIError, OpenAI, RateLimitError
 
-# File extensions to include
+BASE_URL = os.getenv("NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+MODEL = os.getenv("NIM_MODEL", "z-ai/glm-5.2")
+
 INCLUDE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs",
-    ".cpp", ".c", ".h", ".cs", ".rb", ".php", ".swift", ".kt",
-    ".yml", ".yaml", ".json", ".toml", ".md", ".sh", ".sql"
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".java",
+    ".go",
+    ".rs",
+    ".cpp",
+    ".c",
+    ".h",
+    ".cs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".kt",
+    ".yml",
+    ".yaml",
+    ".json",
+    ".toml",
+    ".md",
+    ".sh",
+    ".sql",
 }
-# Directories to skip
 SKIP_DIRS = {
-    ".git", "node_modules", "__pycache__", ".venv", "venv",
-    "dist", "build", ".next", "vendor", ".mypy_cache", ".pytest_cache",
-    "coverage", "tests", "test", "spec", "docs"  # Skip tests/docs for core logic analysis
+    ".git",
+    ".github",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    "vendor",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".pytest_cache",
+    ".idea",
+    "coverage",
+    ".claude",
 }
-MAX_FILE_SIZE_KB = 100
-MAX_CHUNK_TOKENS = 30000  # Safe limit per chunk to avoid context overflow
-MAX_CHUNKS = 15  # Prevent infinite loops on massive monorepos
+# Core-logic source dirs are prioritised so a token cap spends budget on the
+# implementation rather than tests/docs/reports.
+PRIORITY_DIRS = ("api", "mcp-server", "web/src", "scripts", "shared", "infra")
+DEPRIORITIZED_DIRS = ("tests", "test", "docs", "clients")
+# Generated/lock files are not analyzable source.
+EXCLUDE_FILES = {"package-lock.json", "uv.lock", "yarn.lock", "pnpm-lock.yaml", "poetry.lock"}
+
+MAX_FILE_SIZE_KB = int(os.getenv("NIM_MAX_FILE_KB", "100"))
+MAX_CHUNKS = int(os.getenv("NIM_MAX_CHUNKS", "15"))
+# Reserve headroom below the model context for prompt scaffolding + response.
+MAX_CHUNK_TOKENS = 24_000
+REQUEST_TIMEOUT_S = float(os.getenv("NIM_TIMEOUT_S", "120"))
+CHARS_PER_TOKEN = 4  # rough, model-agnostic estimate
 
 
-# ── File Collection ────────────────────────────────────────────────────────────
-def collect_repo_files(root_path: str) -> list[dict]:
-    files = []
+@dataclass
+class RepoFile:
+    path: str
+    content: str
+    tokens: int
+    priority: int  # lower = analysed first
+
+
+# ── Collection ────────────────────────────────────────────────────────────────
+def _priority(rel_path: str) -> int:
+    top = rel_path.split("/", 1)[0]
+    if top in PRIORITY_DIRS:
+        return 0
+    if top in DEPRIORITIZED_DIRS:
+        return 2
+    return 1
+
+
+def collect_repo_files(root_path: str) -> list[RepoFile]:
     root = Path(root_path)
-
+    files: list[RepoFile] = []
     for file_path in sorted(root.rglob("*")):
-        if file_path.is_dir() or any(skip in file_path.parts for skip in SKIP_DIRS):
+        if not file_path.is_file():
             continue
-
-        suffix = file_path.suffix.lower()
-        if suffix not in INCLUDE_EXTENSIONS and file_path.name not in INCLUDE_EXTENSIONS:
+        try:
+            rel = file_path.relative_to(root)
+        except ValueError:
             continue
-
-        size_kb = file_path.stat().st_size / 1024
-        if size_kb > MAX_FILE_SIZE_KB:
+        if any(part in SKIP_DIRS for part in rel.parts):
             continue
-
+        if file_path.name in EXCLUDE_FILES:
+            continue
+        if file_path.suffix.lower() not in INCLUDE_EXTENSIONS:
+            continue
+        if file_path.stat().st_size / 1024 > MAX_FILE_SIZE_KB:
+            continue
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
-            files.append({
-                "path": str(file_path.relative_to(root)),
-                "content": content,
-                "tokens": len(content) // 4  # Rough estimate
-            })
-        except Exception:
+        except OSError:
             continue
+        text = content.strip()
+        if not text:
+            continue
+        files.append(
+            RepoFile(
+                path=str(rel),
+                content=content,
+                tokens=max(1, len(content) // CHARS_PER_TOKEN),
+                priority=_priority(str(rel)),
+            )
+        )
+    # Analyse core logic first, then the rest, so a monorepo cap is well spent.
+    return sorted(files, key=lambda f: (f.priority, f.path))
 
-    return files
 
-
-# ── Chunking Logic ─────────────────────────────────────────────────────────────
-def chunk_files(files: list[dict]) -> list[list[dict]]:
-    chunks = []
-    current_chunk = []
+# ── Chunking ──────────────────────────────────────────────────────────────────
+def chunk_files(files: list[RepoFile]) -> list[list[RepoFile]]:
+    chunks: list[list[RepoFile]] = []
+    current: list[RepoFile] = []
     current_tokens = 0
+    skipped_oversized = 0
 
     for f in files:
-        # If a single file is too big, skip it
-        if f["tokens"] > MAX_CHUNK_TOKENS:
+        if f.tokens > MAX_CHUNK_TOKENS:
+            skipped_oversized += 1
             continue
-
-        if current_tokens + f["tokens"] > MAX_CHUNK_TOKENS:
-            chunks.append(current_chunk)
-            current_chunk = []
-            current_tokens = 0
-
-            # Safety cap on total chunks
+        if current_tokens + f.tokens > MAX_CHUNK_TOKENS and current:
+            chunks.append(current)
+            current, current_tokens = [], 0
             if len(chunks) >= MAX_CHUNKS:
                 break
+        current.append(f)
+        current_tokens += f.tokens
 
-        current_chunk.append(f)
-        current_tokens += f["tokens"]
+    if current and len(chunks) < MAX_CHUNKS:
+        chunks.append(current)
 
-    if current_chunk:
-        chunks.append(current_chunk)
-
+    if skipped_oversized:
+        print(f"   ⚠️  Skipped {skipped_oversized} file(s) larger than one chunk.")
     return chunks
 
 
-# ── API Call with Retry ────────────────────────────────────────────────────────
-def call_nim(client, messages, max_tokens=4096):
-    """Calls the API with basic retry logic for rate limits."""
-    for attempt in range(3):
+# ── API call with backoff ─────────────────────────────────────────────────────
+def call_nim(client: OpenAI, messages: list[dict], max_tokens: int) -> str:
+    """Call the chat API with exponential backoff on rate limits.
+
+    Always returns a string or raises — never returns None silently.
+    """
+    delay = 2.0
+    last_err: Exception | None = None
+    for attempt in range(4):
         try:
-            response = client.chat.completions.create(
+            resp = client.chat.completions.create(
                 model=MODEL,
                 messages=messages,
                 temperature=0.2,
                 top_p=0.8,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                timeout=REQUEST_TIMEOUT_S,
             )
-            return response.choices[0].message.content
-        except Exception as e:
-            if "rate limit" in str(e).lower() and attempt < 2:
-                print(f"  ⏳ Rate limited. Waiting 5 seconds...")
-                time.sleep(5)
-            else:
-                raise e
+            content = resp.choices[0].message.content
+            if content is None:
+                raise APIError("empty completion content", request=None, body=None)
+            return content
+        except RateLimitError as e:  # retryable
+            last_err = e
+            if attempt < 3:
+                print(f"   ⏳ Rate limited (attempt {attempt + 1}); retrying in {delay:.0f}s...")
+                time.sleep(delay)
+                delay *= 2
+        except APIError as e:
+            last_err = e
+            if attempt < 3:
+                print(f"   ⏳ API error (attempt {attempt + 1}): {e}; retrying in {delay:.0f}s...")
+                time.sleep(delay)
+                delay *= 2
+    raise RuntimeError(f"NIM request failed after retries: {last_err}")
 
 
-# ── Main Execution ─────────────────────────────────────────────────────────────
-def main():
-    repo_root = sys.argv[1] if len(sys.argv) > 1 else "."
+# ── Prompts ───────────────────────────────────────────────────────────────────
+CHUNK_SYSTEM = "You are an expert code reviewer. Be concise and precise."
 
-    print(f"\n{'=' * 60}")
-    print(f"  LARGE REPO ANALYZER - {MODEL} on NVIDIA NIM")
-    print(f"{'=' * 60}\n")
-
-    # 1. Collect Files
-    print("📁 Scanning repository...")
-    files = collect_repo_files(repo_root)
-    print(f"✅ Found {len(files)} analyzable files.\n")
-
-    if not files:
-        print("❌ No files found.")
-        sys.exit(1)
-
-    # 2. Chunk Files
-    chunks = chunk_files(files)
-    print(f"📦 Split into {len(chunks)} chunks for processing.\n")
-
-    client = OpenAI(base_url=BASE_URL, api_key=NVIDIA_API_KEY)
-    chunk_summaries = []
-
-    # 3. Analyze Each Chunk
-    for idx, chunk in enumerate(chunks):
-        file_names = [f["path"] for f in chunk]
-        print(f"🤖 Analyzing chunk {idx + 1}/{len(chunks)} ({len(chunk)} files)...")
-
-        # Build chunk prompt
-        contents = "\n\n".join(f"### {f['path']}\n```{Path(f['path']).suffix[1:]}\n{f['content']}\n```" for f in chunk)
-
-        chunk_prompt = f"""You are analyzing a subset of a codebase. 
-Files in this chunk: {', '.join(file_names)}
+CHUNK_PROMPT = """You are analyzing a subset of a codebase.
+Files in this chunk: {names}
 
 {contents}
 
@@ -150,36 +220,17 @@ Provide a concise analysis (max 500 words) covering:
 3. **Code Smells**: Poor patterns, duplication, or complexity?
 Be direct. Use bullet points."""
 
-        summary = call_nim(client, [
-            {"role": "system", "content": "You are an expert code reviewer. Be concise and precise."},
-            {"role": "user", "content": chunk_prompt}
-        ], max_tokens=1024)
+SYNTHESIS_SYSTEM = "You are a Principal Software Architect. Write a professional, actionable report."
 
-        chunk_summaries.append(f"### Chunk {idx + 1} ({', '.join(file_names[:3])}...)\n{summary}")
-        print(f"   ✅ Chunk {idx + 1} complete.\n")
-
-        # Prevent rate limiting between chunks
-        if idx < len(chunks) - 1:
-            time.sleep(2)
-
-            # 4. Final Synthesis
-    print("🔗 Synthesizing final report from all chunks...\n")
-
-    combined_summaries = "\n\n".join(chunk_summaries)
-
-    # Truncate if synthesis prompt is too large
-    if len(combined_summaries) > 100000:
-        combined_summaries = combined_summaries[:100000] + "\n\n[Truncated due to size...]"
-
-    synthesis_prompt = f"""You have analyzed a large repository in {len(chunks)} chunks. 
+SYNTHESIS_PROMPT = """You have analyzed a large repository in {n} chunks.
 Here are the findings from each chunk:
 
-{combined_summaries}
+{summaries}
 
-Now, synthesize these findings into a comprehensive, unified final report. 
-Do not just list the chunks. Combine duplicate findings and identify cross-cutting architectural issues.
+Now synthesize these into a comprehensive, unified final report. Do not just
+list the chunks — merge duplicate findings and identify cross-cutting issues.
 
-Structure your final report exactly like this:
+Structure the report exactly like this:
 
 # 🏗️ Repository Analysis Report
 
@@ -187,43 +238,100 @@ Structure your final report exactly like this:
 (2-3 sentences on what the project is and its overall health)
 
 ## 2. Architecture & Design
-(High-level patterns, how components interact, structural strengths/weaknesses)
+(High-level patterns, component interaction, structural strengths/weaknesses)
 
 ## 3. 🚨 Critical Issues (Bugs & Security)
-(List the most severe bugs, crashes, or security vulnerabilities found across all chunks. Include file paths.)
+(Most severe bugs/crashes/vulnerabilities, with file paths)
 
 ## 4. 🧹 Code Quality & Smells
-(Major patterns of poor code, duplication, or technical debt)
+(Patterns of poor code, duplication, technical debt)
 
 ## 5. ✅ What's Done Well
-(Highlight good practices observed)
+(Good practices observed)
 
 ## 6. 🚀 Top 5 Actionable Recommendations
-(Prioritized list of the most impactful changes to make immediately)
+(Prioritized, highest-impact changes first)
 
 Format in clean Markdown."""
 
-    final_report = call_nim(client, [
-        {"role": "system",
-         "content": "You are a Principal Software Architect. Write a professional, actionable report."},
-        {"role": "user", "content": synthesis_prompt}
-    ], max_tokens=4096)
 
-    # 5. Output Results
-    print("=" * 60)
-    print("  FINAL REPORT GENERATED")
-    print("=" * 60)
+# ── Main ──────────────────────────────────────────────────────────────────────
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Chunked repo analysis via NVIDIA NIM")
+    parser.add_argument("root", nargs="?", default=".", help="repository root to scan")
+    args = parser.parse_args()
+
+    if not os.getenv("NVIDIA_API_KEY"):
+        print("❌ NVIDIA_API_KEY is not set.", file=sys.stderr)
+        return 1
+
+    print(f"\n{'=' * 60}\n  REPO ANALYZER — {MODEL} on NVIDIA NIM\n{'=' * 60}\n")
+
+    print("📁 Scanning repository...")
+    files = collect_repo_files(args.root)
+    print(f"✅ Found {len(files)} analyzable files.")
+    if not files:
+        print("❌ No files found.", file=sys.stderr)
+        return 1
+
+    chunks = chunk_files(files)
+    print(f"📦 Split into {len(chunks)} chunk(s).\n")
+
+    client = OpenAI(base_url=BASE_URL, api_key=os.environ["NVIDIA_API_KEY"])
+
+    chunk_summaries: list[str] = []
+    for idx, chunk in enumerate(chunks):
+        names = [f.path for f in chunk]
+        print(f"🤖 Analyzing chunk {idx + 1}/{len(chunks)} ({len(chunk)} files)...")
+        contents = "\n\n".join(f"### {f.path}\n```{Path(f.path).suffix.lstrip('.')}\n{f.content}\n```" for f in chunk)
+        summary = call_nim(
+            client,
+            [
+                {"role": "system", "content": CHUNK_SYSTEM},
+                {"role": "user", "content": CHUNK_PROMPT.format(names=", ".join(names), contents=contents)},
+            ],
+            max_tokens=1024,
+        )
+        preview = ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+        chunk_summaries.append(f"### Chunk {idx + 1} ({preview})\n{summary}")
+        print(f"   ✅ Chunk {idx + 1} complete.\n")
+        if idx < len(chunks) - 1:
+            time.sleep(2)  # gentle pacing between chunk calls
+
+    # Synthesis runs ONCE, after every chunk summarised above.
+    print("🔗 Synthesizing final report...\n")
+    combined = "\n\n".join(chunk_summaries)
+    if len(combined) > 100_000:
+        combined = combined[:100_000] + "\n\n[Truncated due to size...]"
+
+    report = call_nim(
+        client,
+        [
+            {"role": "system", "content": SYNTHESIS_SYSTEM},
+            {"role": "user", "content": SYNTHESIS_PROMPT.format(n=len(chunks), summaries=combined)},
+        ],
+        max_tokens=4096,
+    )
 
     output_path = Path("repo_analysis.md")
-    output_path.write_text(final_report, encoding="utf-8")
-    print(f"\n💾 Saved to: {output_path.resolve()}\n")
+    output_path.write_text(report, encoding="utf-8")
+    print(f"{'=' * 60}\n  REPORT GENERATED\n{'=' * 60}")
+    print(f"\n💾 Saved to: {output_path.resolve()}")
 
-    # Set GitHub Actions outputs
+    # Surface the report in the Actions run summary.
+    summary_file = os.getenv("GITHUB_STEP_SUMMARY")
+    if summary_file:
+        with open(summary_file, "a", encoding="utf-8") as fh:
+            fh.write(report + "\n")
+
     if os.getenv("GITHUB_OUTPUT"):
-        with open(os.getenv("GITHUB_OUTPUT"), "a") as f:
-            f.write(f"analysis_complete=true\n")
-            f.write(f"chunks_processed={len(chunks)}\n")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write("analysis_complete=true\n")
+            fh.write(f"chunks_processed={len(chunks)}\n")
+            fh.write(f"files_scanned={len(files)}\n")
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

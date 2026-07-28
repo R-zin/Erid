@@ -26,6 +26,9 @@ class Workspace(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     slug: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(256))
+    # When set, every route for this workspace requires this key. NULL means
+    # the workspace is "open" (no auth) until a key is assigned.
+    api_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tasks: Mapped[list["Task"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")

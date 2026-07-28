@@ -1,1 +1,13 @@
-{"mcpServers":{"context-hub":{"command":"python3","args":["mcp-server/src/server.py","--transport","stdio"]}}}
+{
+  "mcpServers": {
+    "context-hub": {
+      "command": "uv",
+      "args": ["run", "python", "mcp-server/src/server.py", "--transport", "stdio"],
+      "env": {
+        "API_BASE": "http://localhost:8000",
+        "WORKSPACE_SLUG": "your-workspace",
+        "WORKSPACE_API_KEY": ""
+      }
+    }
+  }
+}

@@ -42,7 +42,7 @@ jobs:
           echo "✅ NVIDIA_API_KEY is set (length: ${#NVIDIA_API_KEY})"
 
       - name: Install Dependencies
-        run: uv pip install --system openai
+        run: uv pip install openai
 
       - name: Run Chunked Repo Analysis
         id: analysis

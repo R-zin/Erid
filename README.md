@@ -1,143 +1,207 @@
 # AI Context Hub
 
-**Git for AI context.** A shared, real-time memory layer for every AI coding assistant on your team — Claude Code, Cursor, Codex CLI, and anything else that speaks MCP.
+A shared, real-time context server for AI coding tools. **Claude Code, Cursor,
+and Codex CLI all read from and write to the same project state** — tasks,
+decisions, and who's-working-on-what — instead of every session starting from
+zero.
 
-Instead of re-explaining your architecture to a fresh AI conversation every session, connected assistants can query a shared context graph: who's working on what, what's been decided, what's still open, and why.
-
----
-
-## The problem
-
-Every AI coding session starts from zero. Switch from Claude Code to Cursor, or open a new conversation, and you're re-explaining the same architecture decisions, the same "why we use Redis here," the same list of open tasks — every single time. Meanwhile a teammate's AI assistant has no idea what your AI assistant just figured out five minutes ago.
-
-## What this does
-
-AI Context Hub sits between your AI tools and a shared context server. Any connected assistant can:
-
-- See who (human or AI) is currently working on what, and in which file
-- Pull a full workspace summary — active developers, open tasks, recent decisions — in one call
-- Record an architecture/implementation decision so it's never re-litigated or contradicted later
-- Search past decisions and tasks instead of asking you to re-explain
-- Create and update shared tasks that sync instantly across every connected client
-
-It works the same way regardless of which AI tool is asking, because every client talks to the same MCP server over the same protocol.
-
----
-
-## Architecture
+The MCP tools your editor already has (`workspace_summary`, `create_decision`,
+`update_task`, `update_presence`, …) talk to this one hub, so context built up
+in one tool is immediately visible in every other tool and on a live dashboard.
 
 ```
-Claude Code / Cursor / Codex CLI   (one MCP connection per developer, over stdio)
-              │
-              ▼
-       mcp-server              stateless — translates MCP tool calls into HTTP calls
-              │
-              ▼
-       api (FastAPI)           owns all state: workspaces, tasks, decisions, presence
-              │
-   ┌──────────┴──────────┐
-   ▼                     ▼
-PostgreSQL          Event bus (WebSocket)
-                    in-process for MVP, swappable for Redis pub/sub to scale
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│ Claude Code │  │   Cursor    │  │  Codex CLI  │
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       │   MCP (stdio / streamable-http)  │
+       └────────────────┼────────────────┘
+                        ▼
+              ┌──────────────────┐        ┌──────────┐
+              │   MCP server     │───────▶│ REST API │◀────────┐
+              │ (mcp-server/)    │ HTTP   │  (api/)  │         │
+              └──────────────────┘        └────┬─────┘         │
+                                               │               │
+                              ┌────────────────┼───────────┐   │
+                              ▼                ▼           ▼   │
+                         ┌─────────┐    ┌───────────┐  ┌─────┐│
+                         │Postgres │    │ Redis     │  │ WS  ││
+                         │ (state) │    │ pub/sub   │  │push ││
+                         └─────────┘    └───────────┘  └──┬──┘│
+                                                          ▼   │
+                                                    ┌──────────┐
+                                                    │ web/     │
+                                                    │ dashboard│
+                                                    └──────────┘
 ```
 
-- **`mcp-server/`** — The MCP server every AI client connects to. Exposes tools like `workspace_summary`, `search_context`, `create_decision`, `current_tasks`, and `active_developers`. Holds no state itself; every call is a thin HTTP request to `api/`. This is what makes it work identically across Claude Code, Cursor, and Codex — they all just spawn/connect to this one server.
-- **`api/`** — FastAPI backend. Owns workspaces, tasks, decisions, and presence in Postgres, and pushes real-time updates over a WebSocket.
-- **`clients/`** — Ready-to-use MCP configs for Claude Code, Cursor, and Codex CLI, plus setup instructions.
-- **`web/`** — Dashboard frontend (not built yet — the API/WebSocket layer is ready for one).
+## Why
 
----
+Each AI tool keeps its own scratchpad. Decisions made in one session are
+invisible to the next, two agents redo the same analysis, and there's no shared
+list of what's in flight. The Hub externalizes that state into one store with a
+real-time feed, so:
 
-## Quickstart
+- **Continuity** — a new session calls `workspace_summary` and immediately knows
+  open tasks, recent decisions, and active collaborators.
+- **No duplicate work** — `search_context` / `recent_decisions` surface what's
+  already been decided before re-deciding it.
+- **Coordination** — `update_presence` broadcasts "I'm editing `auth.py`" so
+  humans and agents don't collide.
+- **Visibility** — the dashboard shows all of it live over a WebSocket.
 
-**1. Start the backend**
+## Components
+
+| Dir          | What it is                                                            |
+| ------------ | --------------------------------------------------------------------- |
+| `api/`       | FastAPI + Postgres. State, REST routes, and the WebSocket event feed. |
+| `mcp-server/`| MCP server exposing the state as tools to AI clients (stdio or HTTP). |
+| `clients/`   | Ready-made MCP configs for Claude Code, Cursor, Codex CLI.            |
+| `web/`       | React dashboard: live presence, open tasks, recent decisions over WS. |
+| `tests/`     | Integration tests for the API routes + WebSocket (pytest + httpx).    |
+| `mcp-server/tests/` | Integration test driving the MCP tools against a live API.       |
+
+## Quick start
+
+### With Docker Compose
 
 ```bash
 docker compose up -d postgres redis api
+curl http://localhost:8000/health    # {"status":"ok"}
+open http://localhost:8000/docs      # interactive OpenAPI docs
 ```
 
-API docs (interactive, via Swagger) are then live at `http://localhost:8000/docs`.
+### Natively (no Docker)
 
-**2. Connect your AI client**
-
-See [`clients/README.md`](clients/README.md) for Claude Code, Cursor, and Codex CLI setup — each just needs a few lines added to a config file pointing at `mcp-server/src/server.py`.
-
-**3. Try it**
-
-Ask your AI assistant something like:
-
-> What's the current state of this workspace?
-
-It should call `workspace_summary` and answer from real, shared project state instead of asking you to explain the project from scratch.
-
----
-
-## Example: what a shared decision looks like
-
-Instead of losing this in 500 lines of chat history, `create_decision` stores it as structured data every connected assistant can retrieve later:
-
-```json
-{
-  "title": "Introduce ProviderFactory",
-  "reason": "Reduce duplicated provider initialization",
-  "related_files": ["provider.py", "factory.py", "config.py"],
-  "made_by": "Claude Code"
-}
-```
-
-Any assistant — in any tool — can later call `search_context("provider")` or `recent_decisions()` and get this back, instead of rediscovering or contradicting it.
-
----
-
-## Tech stack
-
-| Layer          | Choice                                   |
-|----------------|-------------------------------------------|
-| MCP server     | Python, official `mcp` SDK (FastMCP)      |
-| Backend API    | FastAPI, async SQLAlchemy                 |
-| Database       | PostgreSQL                                |
-| Real-time      | WebSocket (in-process event bus; Redis pub/sub-ready) |
-| Deployment     | Docker / Docker Compose                   |
-
----
-
-## 
----
-
-## Local development (without Docker)
+You need Postgres and Redis running locally, and [`uv`](https://astral.sh/uv):
 
 ```bash
-# API
+# one-time: create the database
+createdb erid   # role/password postgres:postgres per docker-compose
+
+# run the API
 cd api
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-# point DATABASE_URL at a local Postgres instance, then:
-uvicorn app.main:app --reload
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/erid" \
+REDIS_URL="redis://localhost:6379/0" \
+  uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# MCP server
-cd mcp-server
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-python3 src/server.py --transport stdio
+# run the dashboard (proxies /api to :8000)
+cd web && npm install && npm run dev    # http://localhost:5173
 ```
 
-## Project structure
+The API creates its tables on startup (a dev convenience; Alembic is the
+roadmap's intended migration tool).
 
+## Using it from an AI tool
+
+Point your tool's MCP config at the server. `clients/` has ready examples for
+Claude Code, Cursor, and Codex. For Claude Code:
+
+```bash
+claude mcp add context-hub \
+  --env API_BASE=http://localhost:8000 \
+  --env WORKSPACE_SLUG=your-workspace \
+  -- uv run python mcp-server/src/server.py --transport stdio
 ```
-ai-context-hub/
-├── api/                  FastAPI backend
-│   └── app/
-│       ├── models/       SQLAlchemy models (Workspace, Task, Decision, Presence)
-│       ├── schemas/      Pydantic request/response schemas
-│       ├── services/     event bus, workspace resolution
-│       └── api/          REST routes + WebSocket gateway
-├── mcp-server/           MCP server exposed to AI clients
-│   └── src/
-│       ├── tools/        one module per tool group (tasks, decisions, presence, context)
-│       ├── client.py     HTTP client to the api/ backend
-│       └── server.py     entrypoint (stdio / sse / streamable-http)
-├── clients/              example MCP configs per AI tool
-├── web/                  dashboard frontend (planned)
-├── infra/                deployment configs
-└── docker-compose.yml
+
+`WORKSPACE_SLUG` sets a default workspace so tools don't need a slug each call.
+`WORKSPACE_API_KEY` (optional) authenticates against a secured workspace.
+
+Then the tools are available in-session: `workspace_summary`, `search_context`,
+`current_tasks`, `create_task`, `update_task`, `create_decision`,
+`recent_decisions`, `active_developers`, `update_presence`.
+
+## Authentication
+
+One API key per workspace (intentionally minimal — full JWT/OAuth is on the
+roadmap).
+
+- `POST /api/workspaces?slug=NAME` creates a workspace and returns its key
+  **once** (it is never re-disclosed).
+- A workspace touched first via a normal read/write auto-creates **open**
+  (no key) so onboarding is frictionless; secure it by provisioning explicitly.
+- Send the key as the `X-API-Key` header for REST, or `?api_key=...` on the
+  WebSocket (browsers can't set WS headers).
+
+```bash
+KEY=$(curl -s -XPOST 'http://localhost:8000/api/workspaces?slug=myproj' | jq -r .api_key)
+curl -H "X-API-Key: $KEY" http://localhost:8000/api/workspaces/myproj/tasks
 ```
+
+## REST API
+
+Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
+
+| Method | Path                          | Auth | Purpose                          |
+| ------ | ----------------------------- | ---- | -------------------------------- |
+| GET    | `/health`                     | —    | liveness                         |
+| POST   | `/workspaces?slug=`           | —    | provision + mint API key         |
+| GET    | `/workspaces/{slug}/summary`  | open | counts + active developers       |
+| GET    | `/workspaces/{slug}/search?q=`| open | search decisions + tasks         |
+| GET    | `/workspaces/{slug}/tasks`    | key* | list (filter `?status=`)         |
+| POST   | `/workspaces/{slug}/tasks`    | key* | create                           |
+| PUT    | `/workspaces/{slug}/tasks/{id}`| key*| update status/title/assignee     |
+| GET    | `/workspaces/{slug}/decisions`| key* | list recent (`?limit=`)          |
+| POST   | `/workspaces/{slug}/decisions`| key* | record a decision                |
+| GET    | `/workspaces/{slug}/presence` | key* | active collaborators             |
+| POST   | `/workspaces/{slug}/presence` | key* | presence heartbeat (upsert)      |
+| WS     | `/workspaces/{slug}/ws`       | key* | real-time event stream           |
+
+\* only when the workspace has a key configured; open workspaces skip auth.
+
+## Real-time events
+
+Mutations publish events (`task_created`, `task_updated`, `decision_created`,
+`presence_updated`) onto the workspace's stream. The event bus
+(`api/app/services/event_bus.py`) uses **Redis pub/sub** so updates fan out
+across multiple API instances; if Redis is unreachable it falls back to an
+in-process bus (single-instance dev/tests need no broker). Select with
+`EVENT_BUS_BACKEND=redis|memory`.
+
+The dashboard subscribes at `GET /api/workspaces/{slug}/ws` and re-renders live.
+
+## Testing
+
+```bash
+uv run pytest            # API routes + WebSocket + MCP tool round-trip
+```
+
+`tests/` runs the app against an isolated in-memory SQLite DB (no Postgres
+needed) and includes a live WebSocket-over-uvicorn test. `mcp-server/tests/`
+boots a real API subprocess and drives the MCP client end-to-end; set
+`ERID_LIVE_API` to target an already-running server instead.
+
+## Configuration
+
+Environment variables (see `api/app/core/settings.py`, `mcp-server/src/client.py`):
+
+| Var                 | Default                                            | Used by   |
+| ------------------- | -------------------------------------------------- | --------- |
+| `DATABASE_URL`      | `postgresql+asyncpg://postgres:postgres@localhost:5432/erid` | api |
+| `REDIS_URL`         | `redis://localhost:6379/0`                         | api       |
+| `EVENT_BUS_BACKEND` | `redis` (falls back to in-process if unreachable)  | api       |
+| `API_BASE`          | `http://localhost:8000`                            | mcp-server|
+| `WORKSPACE_SLUG`    | —                                                  | mcp-server|
+| `WORKSPACE_API_KEY` | —                                                  | mcp-server|
+
+Docker Compose injects `DATABASE_URL`/`REDIS_URL` pointing at the container
+hosts; the defaults target local services for native dev.
+
+## Roadmap
+
+Done (this iteration):
+
+- [x] REST API for tasks / decisions / presence + summary + search
+- [x] All 9 MCP tools wired end-to-end and config for Claude/Cursor/Codex
+- [x] Redis-backed event bus (in-process fallback) + WebSocket stream
+- [x] Single API-key-per-workspace auth
+- [x] Live React dashboard (presence, tasks, decisions)
+- [x] Integration tests (API routes, WebSocket, MCP round-trip)
+
+Next:
+
+- [ ] Alembic migrations (replace startup `create_all`)
+- [ ] Postgres `citext`/full-text indexes for `search_context`
+- [ ] Richer auth: per-actor keys, roles, JWT/OAuth
+- [ ] Decision ↔ task linking and file-watch auto-presence
+- [ ] Dashboard auth flow + workspace switcher and creation UI
+- [ ] MCP `resources`/`prompts` in addition to tools

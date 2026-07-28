@@ -1,9 +1,8 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from app.models.models import TaskStatus
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkspaceSummary(BaseModel):

@@ -31,9 +31,9 @@ class Workspace(Base):
     api_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    tasks: Mapped[list["Task"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
-    decisions: Mapped[list["Decision"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
-    presences: Mapped[list["Presence"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    tasks: Mapped[list[Task]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    decisions: Mapped[list[Decision]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    presences: Mapped[list[Presence]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
 
 
 class Task(Base):
@@ -46,9 +46,11 @@ class Task(Base):
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.todo)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
-    workspace: Mapped["Workspace"] = relationship(back_populates="tasks")
+    workspace: Mapped[Workspace] = relationship(back_populates="tasks")
 
 
 class Decision(Base):
@@ -62,7 +64,7 @@ class Decision(Base):
     made_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    workspace: Mapped["Workspace"] = relationship(back_populates="decisions")
+    workspace: Mapped[Workspace] = relationship(back_populates="decisions")
 
 
 class Presence(Base):
@@ -76,4 +78,4 @@ class Presence(Base):
     current_task: Mapped[str | None] = mapped_column(String(512), nullable=True)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    workspace: Mapped["Workspace"] = relationship(back_populates="presences")
+    workspace: Mapped[Workspace] = relationship(back_populates="presences")

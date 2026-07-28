@@ -22,11 +22,10 @@ os.environ.setdefault("EVENT_BUS_BACKEND", "memory")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
-from sqlalchemy.pool import StaticPool  # noqa: E402
-
 from app.core.settings import settings  # noqa: E402
 from app.db.session import Base, get_db  # noqa: E402
 from app.main import app  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
 
 TEST_DATABASE_URL = "sqlite+aiosqlite://"
 
@@ -47,10 +46,10 @@ async def db_engine():
 
 
 @pytest.fixture
-async def client(db_engine) -> AsyncGenerator[AsyncClient, None]:
+async def client(db_engine) -> AsyncGenerator[AsyncClient]:
     session_factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
 
-    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession]:
         async with session_factory() as session:
             yield session
 

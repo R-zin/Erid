@@ -19,7 +19,6 @@ import httpx
 import pytest
 import uvicorn
 import websockets
-
 from app.main import app
 
 pytestmark = pytest.mark.asyncio
@@ -77,16 +76,15 @@ def live_server():
 async def test_websocket_endpoint_live(live_server):
     base, ws_base = live_server
     slug = "ws-live"
-    async with httpx.AsyncClient() as h:
-        async with websockets.connect(f"{ws_base}/api/workspaces/{slug}/ws") as ws:
+    async with httpx.AsyncClient() as h, websockets.connect(f"{ws_base}/api/workspaces/{slug}/ws") as ws:
 
-            async def trigger():
-                await asyncio.sleep(0.1)
-                await h.post(f"{base}/api/workspaces/{slug}/decisions", json={"title": "live ws"})
+        async def trigger():
+            await asyncio.sleep(0.1)
+            await h.post(f"{base}/api/workspaces/{slug}/decisions", json={"title": "live ws"})
 
-            t = asyncio.create_task(trigger())
-            msg = await asyncio.wait_for(ws.recv(), timeout=5)
-            await t
-            event = json.loads(msg)
-            assert event["type"] == "decision_created"
-            assert event["data"]["title"] == "live ws"
+        t = asyncio.create_task(trigger())
+        msg = await asyncio.wait_for(ws.recv(), timeout=5)
+        await t
+        event = json.loads(msg)
+        assert event["type"] == "decision_created"
+        assert event["data"]["title"] == "live ws"

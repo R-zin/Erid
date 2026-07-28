@@ -2,7 +2,7 @@ import asyncio
 import logging
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import or_, select
@@ -140,10 +140,7 @@ async def list_decisions(
     db: AsyncSession = Depends(get_db),
 ) -> list[DecisionOut]:
     stmt = (
-        select(Decision)
-        .where(Decision.workspace_id == workspace.id)
-        .order_by(Decision.created_at.desc())
-        .limit(limit)
+        select(Decision).where(Decision.workspace_id == workspace.id).order_by(Decision.created_at.desc()).limit(limit)
     )
     result = await db.execute(stmt)
     return [DecisionOut.model_validate(d) for d in result.scalars().all()]
@@ -179,7 +176,7 @@ async def list_presence(
     workspace: Workspace = Depends(require_workspace_access),
     db: AsyncSession = Depends(get_db),
 ) -> list[PresenceOut]:
-    cutoff = datetime.now(timezone.utc) - STALE_AFTER
+    cutoff = datetime.now(UTC) - STALE_AFTER
     stmt = (
         select(Presence)
         .where(Presence.workspace_id == workspace.id, Presence.last_seen > cutoff)
@@ -209,7 +206,7 @@ async def update_presence(
     presence.actor_type = payload.actor_type
     presence.current_file = payload.current_file
     presence.current_task = payload.current_task
-    presence.last_seen = datetime.now(timezone.utc)
+    presence.last_seen = datetime.now(UTC)
     await db.commit()
     await db.refresh(presence)
     await _publish(workspace.slug, "presence_updated", PresenceOut.model_validate(presence).model_dump(mode="json"))
@@ -235,9 +232,7 @@ async def search_workspace(
             or_(Decision.title.ilike(like), Decision.reason.ilike(like)),
         )
     )
-    tasks_result = await db.execute(
-        select(Task).where(Task.workspace_id == workspace.id, Task.title.ilike(like))
-    )
+    tasks_result = await db.execute(select(Task).where(Task.workspace_id == workspace.id, Task.title.ilike(like)))
     return {
         "query": q,
         "decisions": [DecisionOut.model_validate(d) for d in decisions_result.scalars().all()],
@@ -254,13 +249,17 @@ async def workspace_summary(
     tasks = (await db.execute(select(Task).where(Task.workspace_id == workspace.id))).scalars().all()
     decisions = (await db.execute(select(Decision).where(Decision.workspace_id == workspace.id))).scalars().all()
     presences = (
-        await db.execute(
-            select(Presence).where(
-                Presence.workspace_id == workspace.id,
-                Presence.last_seen > datetime.now(timezone.utc) - STALE_AFTER,
+        (
+            await db.execute(
+                select(Presence).where(
+                    Presence.workspace_id == workspace.id,
+                    Presence.last_seen > datetime.now(UTC) - STALE_AFTER,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     active_developers = sorted({p.actor_name for p in presences})
     return WorkspaceSummary(
         slug=workspace.slug,

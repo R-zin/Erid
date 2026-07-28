@@ -27,7 +27,6 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import redis.asyncio as aioredis
-
 from app.core.settings import settings
 
 logger = logging.getLogger("context_hub.event_bus")
@@ -116,7 +115,7 @@ class RedisEventBus:
             if message and message.get("type") == "message":
                 try:
                     data = json.loads(message["data"])
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     continue
                 queue.put_nowait(data)
             else:

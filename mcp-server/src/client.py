@@ -73,7 +73,9 @@ class APIClient:
         title: str | None = None,
         assigned_to: str | None = None,
     ):
-        body = {k: v for k, v in {"status": status, "title": title, "assigned_to": assigned_to}.items() if v is not None}
+        body = {
+            k: v for k, v in {"status": status, "title": title, "assigned_to": assigned_to}.items() if v is not None
+        }
         r = await self._client.put(self._url(slug, f"/tasks/{task_id}"), json=body)
         r.raise_for_status()
         return r.json()

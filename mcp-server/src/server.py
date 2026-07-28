@@ -21,9 +21,8 @@ from pathlib import Path
 # module; ensure the src/ dir is importable for the ``client`` module.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from mcp.server.fastmcp import FastMCP
-
 from client import APIClient
+from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("ai-context-hub")
 
@@ -73,7 +72,9 @@ async def current_tasks(status: str | None = None, slug: str | None = None) -> s
 
 
 @mcp.tool()
-async def create_task(title: str, assigned_to: str | None = None, created_by: str | None = None, slug: str | None = None) -> str:
+async def create_task(
+    title: str, assigned_to: str | None = None, created_by: str | None = None, slug: str | None = None
+) -> str:
     """Create a task in the shared workspace."""
     client = APIClient()
     try:
@@ -110,7 +111,9 @@ async def create_decision(
     client = APIClient()
     try:
         return _fmt(
-            await client.create_decision(_slug(slug), title, reason=reason, related_files=related_files, made_by=made_by)
+            await client.create_decision(
+                _slug(slug), title, reason=reason, related_files=related_files, made_by=made_by
+            )
         )
     finally:
         await client.close()

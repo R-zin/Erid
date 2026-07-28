@@ -1,8 +1,7 @@
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.keys import generate_api_key
 from app.models.models import Workspace
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def get_workspace_by_slug(db: AsyncSession, slug: str) -> Workspace | None:

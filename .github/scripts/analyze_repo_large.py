@@ -9,16 +9,24 @@ review each chunk, then synthesizes a single report. Written for GitHub Actions
 Configuration is via environment variables so behaviour can be tuned without
 editing code:
 
-    NVIDIA_API_KEY   (required) NIM API key.
-    NIM_BASE_URL     default https://integrate.api.nvidia.com/v1
-    NIM_MODEL        default z-ai/glm-5.2
-    NIM_MAX_CHUNKS   default 15 (safety cap on huge repos)
-    NIM_MAX_FILE_KB  default 100 (skip oversized files)
-    NIM_TIMEOUT_S    default 120 (per-request timeout)
+    NVIDIA_API_KEY     (required) NIM API key.
+    NIM_BASE_URL       default https://integrate.api.nvidia.com/v1
+    NIM_MODEL          default z-ai/glm-5.2
+    NIM_MAX_CHUNKS     default 15 (safety cap on huge repos)
+    NIM_MAX_FILE_KB    default 100 (skip oversized files)
+    NIM_TIMEOUT_S      default 120 (per-request timeout)
+    NIM_MAX_DIFF_FILES default 40 (cap on files shown in the change patch)
+    NIM_MAX_DIFF_CHARS default 12000 (cap on the change patch text)
+
+The artifact (repo_analysis.md) opens with a "Changes in This Run" section:
+commit/PR metadata, a diffstat, and a bounded unified diff of what changed. In
+CI the diff range comes from GITHUB_EVENT_NAME plus GITHUB_BEFORE (push) or
+GITHUB_BASE_SHA / GITHUB_BASE_REF (pull_request); locally it diffs HEAD~1.
 """
 
 import argparse
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -169,6 +177,112 @@ def chunk_files(files: list[RepoFile]) -> list[list[RepoFile]]:
     return chunks
 
 
+# ── What changed in this commit / PR ──────────────────────────────────────────
+MAX_DIFF_FILES = int(os.getenv("NIM_MAX_DIFF_FILES", "40"))
+MAX_DIFF_CHARS = int(os.getenv("NIM_MAX_DIFF_CHARS", "12000"))
+
+
+def _git(root: str, *args: str) -> str | None:
+    """Run a git command in `root`, returning stripped stdout or None on failure.
+
+    Never raises: git may be unavailable or the diff range may not resolve
+    (shallow clones), in which case the caller just omits the section.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except OSError, subprocess.SubprocessError:
+        return None
+    if out.returncode != 0:
+        return None
+    text = out.stdout.strip()
+    return text or None
+
+
+def _base_ref(root: str) -> str | None:
+    """Resolve the base commit to diff against for this CI run.
+
+    Push to main  -> the commit before HEAD (GITHUB_BEFORE).
+    Pull request  -> the merge base with the base branch.
+    """
+    if os.getenv("GITHUB_EVENT_NAME") == "pull_request":
+        base_sha = os.getenv("GITHUB_BASE_SHA")
+        if base_sha and _git(root, "cat-file", "-e", f"{base_sha}^{{commit}}"):
+            return base_sha
+        base_branch = os.getenv("GITHUB_BASE_REF")
+        if base_branch:
+            return _git(root, "merge-base", "HEAD", f"origin/{base_branch}")
+        return None
+    before = os.getenv("GITHUB_BEFORE", "")
+    if before and set(before) != {"0"}:  # GitHub sends all-zeros for a brand-new branch
+        return before
+    return "HEAD~1"
+
+
+def collect_change_context(root: str) -> str:
+    """Build a Markdown section describing what this commit / PR changes.
+
+    Combines commit metadata, a per-file diffstat, a name-status list, and a
+    bounded unified diff so the LLM (and a human reading the artifact) can see
+    exactly what changed, not just the whole repo.
+    """
+    if _git(root, "rev-parse", "--is-inside-work-tree") is None:
+        return ""
+
+    sha = _git(root, "rev-parse", "--short", "HEAD") or "?"
+    subject = _git(root, "log", "-1", "--pretty=%s") or ""
+    author = _git(root, "log", "-1", "--pretty=%an") or ""
+    date = _git(root, "log", "-1", "--pretty=%cs") or ""
+
+    lines = ["# 🔄 Changes in This Run", ""]
+    lines.append(f"**Commit** `{sha}` — {subject}")
+    if author or date:
+        lines.append(f"**Author** {author} · **Date** {date}")
+    event = os.getenv("GITHUB_EVENT_NAME")
+    if event:
+        lines.append(f"**Trigger** `{event}`")
+    lines.append("")
+
+    base = _base_ref(root)
+    if base:
+        stat = _git(root, "diff", "--shortstat", base, "HEAD")
+        name_status = _git(root, "diff", "--name-status", base, "HEAD") or ""
+        if stat or name_status:
+            lines += [f"## Diff vs `{base}`", ""]
+            if stat:
+                lines.append(f"**{stat}**")
+                lines.append("")
+            if name_status:
+                lines.append("```")
+                lines.append(name_status)
+                lines.append("```")
+                lines.append("")
+
+        if name_status:
+            shown_files = [ln.split("\t")[-1] for ln in name_status.splitlines()[:MAX_DIFF_FILES]]
+            diff = _git(root, "diff", "--unified=3", base, "HEAD", "--", *shown_files) or ""
+            if diff:
+                if len(diff) > MAX_DIFF_CHARS:
+                    diff = diff[:MAX_DIFF_CHARS] + "\n\n… [diff truncated] …"
+                lines += [
+                    f"## Patch (first {min(len(shown_files), MAX_DIFF_FILES)} file(s), bounded)",
+                    "",
+                    "```diff",
+                    diff,
+                    "```",
+                    "",
+                ]
+    else:
+        lines.append("_Could not determine a base commit to diff against._")
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
 # ── API call with backoff ─────────────────────────────────────────────────────
 def call_nim(client: OpenAI, messages: list[dict], max_tokens: int) -> str:
     """Call the chat API with exponential backoff on rate limits.
@@ -313,8 +427,12 @@ def main() -> int:
         max_tokens=4096,
     )
 
+    # Document what this commit / PR actually changed ahead of the analysis.
+    changes = collect_change_context(args.root)
+    document = f"{changes}\n---\n\n{report}" if changes else report
+
     output_path = Path("repo_analysis.md")
-    output_path.write_text(report, encoding="utf-8")
+    output_path.write_text(document, encoding="utf-8")
     print(f"{'=' * 60}\n  REPORT GENERATED\n{'=' * 60}")
     print(f"\n💾 Saved to: {output_path.resolve()}")
 
@@ -322,7 +440,7 @@ def main() -> int:
     summary_file = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_file:
         with open(summary_file, "a", encoding="utf-8") as fh:
-            fh.write(report + "\n")
+            fh.write(document + "\n")
 
     if os.getenv("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:

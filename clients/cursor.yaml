@@ -6,3 +6,4 @@ mcp:
       API_BASE: http://localhost:8000
       WORKSPACE_SLUG: your-workspace
       WORKSPACE_API_KEY: ""
+      WORKSPACE_TOKEN: ""

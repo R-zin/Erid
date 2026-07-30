@@ -9,8 +9,8 @@ from app.db.session import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Dev convenience: create tables on startup (Alembic is the roadmap's
-    # intended migration tool).
+    # Bring the schema up to date. Runs Alembic "upgrade head" for real
+    # databases; tests/SQLite create tables directly from the models instead.
     await init_db()
     yield
 

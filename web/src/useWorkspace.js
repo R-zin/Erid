@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { makeClient } from './api.js'
+import { makeClient, ApiError } from './api.js'
 
 // Live workspace state: initial REST snapshot + real-time WebSocket events.
-export function useWorkspace(slug, apiKey) {
+// `credential` (API key or JWT) + `authType` ('key' | 'token') authenticate
+// both the REST calls and the socket. Auth failures (401/403) surface as an
+// ApiError so the UI can prompt the user to re-authenticate.
+export function useWorkspace(slug, credential, authType) {
   const [summary, setSummary] = useState(null)
   const [tasks, setTasks] = useState([])
   const [decisions, setDecisions] = useState([])
@@ -12,7 +15,7 @@ export function useWorkspace(slug, apiKey) {
   const wsRef = useRef(null)
 
   const load = useCallback(async () => {
-    const client = makeClient({ slug, apiKey })
+    const client = makeClient({ slug, credential, authType })
     const [s, t, d, p] = await Promise.all([
       client.summary(),
       client.tasks(),
@@ -23,18 +26,26 @@ export function useWorkspace(slug, apiKey) {
     setTasks(t)
     setDecisions(d)
     setPresence(p)
-  }, [slug, apiKey])
+  }, [slug, credential, authType])
 
   // Initial snapshot.
   useEffect(() => {
+    if (!slug) {
+      setSummary(null)
+      setTasks([])
+      setDecisions([])
+      setPresence([])
+      setError(null)
+      return
+    }
     setError(null)
-    load().catch((e) => setError(e.message))
-  }, [load])
+    load().catch((e) => setError(authMessage(e)))
+  }, [slug, load])
 
   // Real-time stream.
   useEffect(() => {
     if (!slug) return undefined
-    const client = makeClient({ slug, apiKey })
+    const client = makeClient({ slug, credential, authType })
     const ws = new WebSocket(client.socketUrl())
     wsRef.current = ws
 
@@ -52,9 +63,16 @@ export function useWorkspace(slug, apiKey) {
       ws.close()
       wsRef.current = null
     }
-  }, [slug, apiKey, load])
+  }, [slug, credential, authType, load])
 
-  return { summary, tasks, decisions, presence, connected, error, reload: load }
+  return { summary, tasks, decisions, presence, connected, error, reload: load, setTasks }
+}
+
+function authMessage(e) {
+  if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+    return 'Authentication failed (check your workspace slug and credential, then reconnect).'
+  }
+  return e.message
 }
 
 function applyEvent(event, { setTasks, setDecisions, setPresence }) {

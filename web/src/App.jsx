@@ -1,49 +1,73 @@
-import React, { useState } from 'react'
+import React, { useMemo } from 'react'
 import { useWorkspace } from './useWorkspace.js'
+import { useWorkspaces } from './useWorkspaces.js'
+import { makeClient } from './api.js'
 import Presence from './components/Presence.jsx'
 import TaskList from './components/TaskList.jsx'
 import DecisionList from './components/DecisionList.jsx'
+import WorkspaceSwitcher from './components/WorkspaceSwitcher.jsx'
 
 export default function App() {
-  const [slug, setSlug] = useState(() => localStorage.getItem('ch_slug') || 'erid')
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('ch_key') || '')
-  const [active, setActive] = useState({ slug, apiKey })
+  const {
+    workspaces,
+    active,
+    activeSlug,
+    upsertWorkspace,
+    removeWorkspace,
+    selectWorkspace,
+  } = useWorkspaces()
 
-  const { summary, tasks, decisions, presence, connected, error } = useWorkspace(active.slug, active.apiKey)
+  const credential = active?.credential || ''
+  const authType = active?.authType || 'key'
+  const slug = active?.slug || ''
 
-  const connect = (e) => {
-    e.preventDefault()
-    localStorage.setItem('ch_slug', slug)
-    localStorage.setItem('ch_key', apiKey)
-    setActive({ slug, apiKey })
-  }
+  const { summary, tasks, decisions, presence, connected, error, setTasks } =
+    useWorkspace(slug, credential, authType)
+
+  // A client bound to the active workspace for mutations (task create). Null
+  // until a workspace is selected so the form can disable itself.
+  const client = useMemo(
+    () => (slug ? makeClient({ slug, credential, authType }) : null),
+    [slug, credential, authType],
+  )
+
+  const isAuthError =
+    !!error && /authentication failed/i.test(error)
 
   return (
     <div className="app">
       <header className="topbar">
         <h1>AI Context Hub</h1>
-        <form className="connect" onSubmit={connect}>
-          <input
-            value={slug}
-            onChange={(e) => setSlug(e.target.value)}
-            placeholder="workspace slug"
-            aria-label="workspace slug"
-          />
-          <input
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="api key (optional)"
-            aria-label="api key"
-            type="password"
-          />
-          <button type="submit">Connect</button>
-        </form>
+        <WorkspaceSwitcher
+          workspaces={workspaces}
+          active={active}
+          activeSlug={activeSlug}
+          onSelect={selectWorkspace}
+          onSave={upsertWorkspace}
+          onRemove={removeWorkspace}
+        />
         <span className={connected ? 'status on' : 'status off'}>
           {connected ? '● live' : '○ offline'}
         </span>
       </header>
 
-      {error && <div className="error">Error: {error}</div>}
+      {!slug && (
+        <div className="error">
+          No workspace selected. Add one with <strong>+ New</strong> above (slug + optional
+          API key or token) to get started.
+        </div>
+      )}
+
+      {error && slug && (
+        <div className="error">
+          Error: {error}
+          {isAuthError && (
+            <div className="small" style={{ marginTop: 6 }}>
+              Open <strong>Edit</strong> above to update the credential for this workspace.
+            </div>
+          )}
+        </div>
+      )}
 
       {summary && (
         <section className="summary">
@@ -57,7 +81,7 @@ export default function App() {
 
       <main className="grid">
         <Presence presence={presence} />
-        <TaskList tasks={tasks} />
+        <TaskList tasks={tasks} client={client} canWrite={!!credential} onMutate={setTasks} />
         <DecisionList decisions={decisions} />
       </main>
     </div>

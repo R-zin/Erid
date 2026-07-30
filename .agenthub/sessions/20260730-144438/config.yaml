@@ -1,0 +1,9 @@
+session: 20260730-144438
+base: main@c17c3c9
+coordinator: main claude session
+mode: disjoint-domains (not competitive)
+domains:
+  agent-1: backend-api   (#7 #8 #9)
+  agent-2: infra-mcp-config (#6 #10 #12 #13)
+  agent-3: dashboard     (#5 #11)
+  agent-4: test-sweep    (#14)

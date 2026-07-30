@@ -39,6 +39,55 @@ body {
 .status.on { color: var(--green); }
 .status.off { color: var(--muted); }
 
+/* Workspace switcher */
+.switcher { flex: 1; min-width: 260px; }
+.switcher-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.switcher-row select,
+.switcher-form select {
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; min-width: 0; flex: 1;
+}
+.switcher-form {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;
+  padding: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+}
+.switcher-form input {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; min-width: 0; flex: 1;
+}
+.switcher-form select { flex: 0 1 auto; }
+.switcher-form button {
+  background: var(--accent); border: none; color: white;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+button.ghost {
+  background: transparent; border: 1px solid var(--border); color: var(--text);
+  padding: 7px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+button.ghost:hover { border-color: var(--accent); color: var(--accent); }
+button.ghost.danger:hover { border-color: var(--red); color: var(--red); }
+
+/* Task quick-create form */
+.task-create { margin-bottom: 12px; }
+.task-create-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.task-create-row input,
+.task-create-row select {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; min-width: 0; flex: 1;
+}
+.task-create-row select { flex: 0 1 auto; }
+.task-create-row button {
+  background: var(--accent); border: none; color: white;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.task-create-row button:disabled,
+.task-create-row input:disabled { opacity: 0.5; cursor: not-allowed; }
+button.small-toggle { padding: 2px 4px; font-size: 11px; border: none; color: var(--muted); }
+button.small-toggle:hover { color: var(--accent); border: none; }
+.task.optimistic { opacity: 0.6; }
+.error.inline { margin: 8px 0; }
+.hint { margin: 4px 0 10px; }
+
 .error {
   margin: 12px 0; padding: 10px 14px; border-radius: 6px;
   background: rgba(229, 83, 75, 0.12); color: var(--red); border: 1px solid var(--red);

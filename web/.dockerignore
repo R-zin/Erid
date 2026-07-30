@@ -1,0 +1,13 @@
+# Keep the build context small and reproducible.
+node_modules
+dist
+.vite
+
+# local env / editor noise
+.env
+*.db
+.DS_Store
+
+# docker artifacts themselves
+Dockerfile
+.dockerignore

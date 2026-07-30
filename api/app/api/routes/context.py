@@ -5,8 +5,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import Column, func, or_, select
+from sqlalchemy import Column, select
 from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -41,10 +43,12 @@ from app.schemas.schemas import (
     TaskUpdate,
     TokenRequest,
     WorkspaceCreated,
-    WorkspaceSummary,
+    WorkspaceKeyRotated,
+    WorkspaceListItem,
+    WorkspaceSecured,
 )
 from app.services.event_bus import get_event_bus
-from app.services.workspace_service import get_or_create_workspace, get_workspace_by_slug
+from app.services.workspace_service import get_workspace_by_slug
 
 logger = logging.getLogger("context_hub.routes")
 
@@ -98,6 +102,77 @@ async def provision_workspace(
     return WorkspaceCreated(
         slug=workspace.slug, name=workspace.name, created_at=workspace.created_at, api_key=workspace.api_key
     )
+
+
+@router.delete("/workspaces/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_workspace(
+    principal: Principal = Depends(require_action(Permission.owner)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete an entire workspace (owner only).
+
+    Cascades its tasks, decisions, presences, and actors/grants. Tasks/decisions/
+    presences/actors are removed via the ORM ``delete-orphan`` cascade on the
+    workspace relationships (the ORM loads and bulk-deletes them); grants are
+    removed by the DB-level ``ON DELETE CASCADE`` on their actor FK.
+    """
+    workspace = principal.workspace
+    await db.delete(workspace)
+    await db.commit()
+    await _publish(workspace.slug, "workspace_deleted", {"slug": workspace.slug})
+
+
+@router.get("/workspaces", response_model=list[WorkspaceListItem])
+async def list_workspaces(db: AsyncSession = Depends(get_db)) -> list[WorkspaceListItem]:
+    """List every workspace (slug, name, secured flag).
+
+    Deliberately unauthenticated: there is no instance-wide principal to gate on
+    (principals are per-workspace), a directory is needed to discover workspaces,
+    and only non-secret metadata is exposed — keys are never returned. A keyless
+    workspace must remain discoverable so it can later be secured.
+    """
+    result = await db.execute(select(Workspace).order_by(Workspace.slug))
+    return [
+        WorkspaceListItem(slug=w.slug, name=w.name, created_at=w.created_at, secured=bool(w.api_key))
+        for w in result.scalars().all()
+    ]
+
+
+@router.post("/workspaces/{slug}/secure", response_model=WorkspaceSecured)
+async def secure_workspace(slug: str, db: AsyncSession = Depends(get_db)) -> WorkspaceSecured:
+    """Secure an open workspace by minting its workspace key (returned once).
+
+    An open workspace (``api_key`` NULL) has no admin at all, so there is no
+    credential to gate this on: anyone can claim it. That matches the existing
+    provisioning model (``POST /workspaces`` is likewise open). The first caller
+    becomes the de-facto owner by taking the disclosed key. If the workspace is
+    already secured its key is never re-disclosed (use ``rotate-key`` instead).
+    """
+    workspace = await get_workspace_by_slug(db, slug)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"workspace '{slug}' not found")
+    if workspace.api_key:
+        return WorkspaceSecured(slug=workspace.slug, secured=True, api_key=None)
+    workspace.api_key = generate_api_key()
+    await db.commit()
+    return WorkspaceSecured(slug=workspace.slug, secured=True, api_key=workspace.api_key)
+
+
+@router.post("/workspaces/{slug}/rotate-key", response_model=WorkspaceKeyRotated)
+async def rotate_workspace_key(
+    principal: Principal = Depends(require_action(Permission.owner)),
+    db: AsyncSession = Depends(get_db),
+) -> WorkspaceKeyRotated:
+    """Rotate the workspace key (owner only). Returns the new key once.
+
+    The old workspace key stops working immediately. Per-actor keys are
+    unaffected (they are separate credentials), so existing actors keep access
+    and the rotated key simply re-secures the legacy/owner path.
+    """
+    workspace = principal.workspace
+    workspace.api_key = generate_api_key()
+    await db.commit()
+    return WorkspaceKeyRotated(slug=workspace.slug, api_key=workspace.api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +343,23 @@ async def update_task(
     return TaskOut.model_validate(task)
 
 
+@router.delete("/workspaces/{slug}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task(
+    task_id: uuid.UUID,
+    principal: Principal = Depends(require_action(Permission.write_tasks)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete a task. Decisions that link to it are kept (their task_id SET NULLs)."""
+    workspace = principal.workspace
+    result = await db.execute(select(Task).where(Task.id == task_id, Task.workspace_id == workspace.id))
+    task = result.scalars().first()
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"task '{task_id}' not found")
+    await db.delete(task)
+    await db.commit()
+    await _publish(workspace.slug, "task_deleted", {"id": str(task_id), "workspace_id": str(workspace.id)})
+
+
 @router.get("/workspaces/{slug}/tasks/{task_id}/decisions", response_model=list[DecisionOut])
 async def list_task_decisions(
     task_id: uuid.UUID,
@@ -337,6 +429,23 @@ async def create_decision(
     return DecisionOut.model_validate(decision)
 
 
+@router.delete("/workspaces/{slug}/decisions/{decision_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_decision(
+    decision_id: uuid.UUID,
+    principal: Principal = Depends(require_action(Permission.write_decisions)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete a decision."""
+    workspace = principal.workspace
+    result = await db.execute(select(Decision).where(Decision.id == decision_id, Decision.workspace_id == workspace.id))
+    decision = result.scalars().first()
+    if decision is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"decision '{decision_id}' not found")
+    await db.delete(decision)
+    await db.commit()
+    await _publish(workspace.slug, "decision_deleted", {"id": str(decision_id), "workspace_id": str(workspace.id)})
+
+
 # ---------------------------------------------------------------------------
 # Presence
 # ---------------------------------------------------------------------------
@@ -364,112 +473,47 @@ async def update_presence(
     principal: Principal = Depends(require_action(Permission.presence)),
     db: AsyncSession = Depends(get_db),
 ) -> PresenceOut:
-    """Upsert a presence heartbeat for an actor, keyed on (workspace, actor)."""
-    workspace = principal.workspace
-    result = await db.execute(
-        select(Presence).where(
-            Presence.workspace_id == workspace.id,
-            Presence.actor_name == payload.actor_name,
-        )
-    )
-    presence = result.scalars().first()
-    if presence is None:
-        presence = Presence(workspace_id=workspace.id, actor_name=payload.actor_name)
-        db.add(presence)
-    presence.actor_type = payload.actor_type
-    presence.current_file = payload.current_file
-    presence.current_task = payload.current_task
-    presence.last_seen = datetime.now(UTC)
-    await db.commit()
-    await db.refresh(presence)
-    await _publish(workspace.slug, "presence_updated", PresenceOut.model_validate(presence).model_dump(mode="json"))
-    return PresenceOut.model_validate(presence)
+    """Upsert a presence heartbeat for an actor, keyed on (workspace, actor).
 
-
-# ---------------------------------------------------------------------------
-# Search & summary (open reads)
-# ---------------------------------------------------------------------------
-
-
-@router.get("/workspaces/{slug}/search")
-async def search_workspace(
-    slug: str,
-    q: str = Query(..., min_length=1),
-    limit: int = Query(default=20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-):
-    """Search decisions and tasks in a workspace.
-
-    On Postgres this uses full-text search over the generated ``search_vector``
-    columns (stemmed matching, ranked by relevance). On other backends (SQLite,
-    used by tests) it falls back to a substring match.
+    Implemented as a true atomic ``INSERT ... ON CONFLICT ... DO UPDATE`` against
+    the ``(workspace_id, actor_name)`` unique constraint, using the Postgres or
+    SQLite insert construct depending on the bound dialect. This removes the old
+    read-then-insert race that would raise on concurrent heartbeats.
     """
-    workspace = await get_or_create_workspace(db, slug)
-
-    if db.bind.dialect.name == "postgresql":
-        query = func.websearch_to_tsquery("english", q)
-        decisions_result = await db.execute(
-            select(Decision)
-            .where(Decision.workspace_id == workspace.id, _search_vector(Decision).op("@@")(query))
-            .order_by(func.ts_rank(_search_vector(Decision), query).desc())
-            .limit(limit)
-        )
-        tasks_result = await db.execute(
-            select(Task)
-            .where(Task.workspace_id == workspace.id, _search_vector(Task).op("@@")(query))
-            .order_by(func.ts_rank(_search_vector(Task), query).desc())
-            .limit(limit)
-        )
-    else:
-        like = f"%{q}%"
-        decisions_result = await db.execute(
-            select(Decision)
-            .where(
-                Decision.workspace_id == workspace.id,
-                or_(Decision.title.ilike(like), Decision.reason.ilike(like)),
-            )
-            .limit(limit)
-        )
-        tasks_result = await db.execute(
-            select(Task).where(Task.workspace_id == workspace.id, Task.title.ilike(like)).limit(limit)
-        )
-
-    return {
-        "query": q,
-        "decisions": [DecisionOut.model_validate(d) for d in decisions_result.scalars().all()],
-        "tasks": [TaskOut.model_validate(t) for t in tasks_result.scalars().all()],
+    workspace = principal.workspace
+    now = datetime.now(UTC)
+    values = {
+        "workspace_id": workspace.id,
+        "actor_name": payload.actor_name,
+        "actor_type": payload.actor_type,
+        "current_file": payload.current_file,
+        "current_task": payload.current_task,
+        "last_seen": now,
     }
-
-
-@router.get("/workspaces/{slug}/summary", response_model=WorkspaceSummary)
-async def workspace_summary(
-    slug: str,
-    db: AsyncSession = Depends(get_db),
-) -> WorkspaceSummary:
-    workspace = await get_or_create_workspace(db, slug)
-    tasks = (await db.execute(select(Task).where(Task.workspace_id == workspace.id))).scalars().all()
-    decisions = (await db.execute(select(Decision).where(Decision.workspace_id == workspace.id))).scalars().all()
-    presences = (
+    insert = pg_insert if db.bind.dialect.name == "postgresql" else sqlite_insert
+    stmt = insert(Presence).values(**values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["workspace_id", "actor_name"],
+        set_={
+            "actor_type": stmt.excluded.actor_type,
+            "current_file": stmt.excluded.current_file,
+            "current_task": stmt.excluded.current_task,
+            "last_seen": stmt.excluded.last_seen,
+        },
+    )
+    await db.execute(stmt)
+    await db.commit()
+    presence = (
         (
             await db.execute(
-                select(Presence).where(
-                    Presence.workspace_id == workspace.id,
-                    Presence.last_seen > datetime.now(UTC) - STALE_AFTER,
-                )
+                select(Presence).where(Presence.workspace_id == workspace.id, Presence.actor_name == payload.actor_name)
             )
         )
         .scalars()
-        .all()
+        .one()
     )
-    active_developers = sorted({p.actor_name for p in presences})
-    return WorkspaceSummary(
-        slug=workspace.slug,
-        name=workspace.name,
-        task_count=len(tasks),
-        open_task_count=sum(1 for t in tasks if t.status != TaskStatus.done),
-        decision_count=len(decisions),
-        active_developers=active_developers,
-    )
+    await _publish(workspace.slug, "presence_updated", PresenceOut.model_validate(presence).model_dump(mode="json"))
+    return PresenceOut.model_validate(presence)
 
 
 # ---------------------------------------------------------------------------

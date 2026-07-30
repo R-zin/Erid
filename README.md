@@ -70,6 +70,12 @@ curl http://localhost:8000/health    # {"status":"ok"}
 open http://localhost:8000/docs      # interactive OpenAPI docs
 ```
 
+Add the dashboard container to serve the React UI (proxies `/api` + WS to `api`):
+
+```bash
+docker compose up -d web            # http://localhost:8080
+```
+
 ### Natively (no Docker)
 
 You need Postgres and Redis running locally, and [`uv`](https://astral.sh/uv):
@@ -109,6 +115,9 @@ claude mcp add context-hub \
 Then the tools are available in-session: `workspace_summary`, `search_context`,
 `current_tasks`, `create_task`, `update_task`, `create_decision`,
 `recent_decisions`, `active_developers`, `update_presence`, `task_decisions`.
+The server also exposes read-only **resources** (`workspace://{slug}/summary`,
+`.../tasks`, `.../decisions`, `.../presence`) and **prompts**
+(`summarize_workspace`, `standup_report`, `catch_up`).
 
 ## Auto-presence (file watch)
 
@@ -172,8 +181,8 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | ------ | ----------------------------- | ---- | -------------------------------- |
 | GET    | `/health`                     | —    | liveness                         |
 | POST   | `/workspaces?slug=`           | —    | provision + mint API key         |
-| GET    | `/workspaces/{slug}/summary`  | open | counts + active developers       |
-| GET    | `/workspaces/{slug}/search?q=`| open | search decisions + tasks         |
+| GET    | `/workspaces/{slug}/summary`  | key* | counts + active developers       |
+| GET    | `/workspaces/{slug}/search?q=`| key* | search decisions + tasks         |
 | GET    | `/workspaces/{slug}/tasks`    | key* | list (filter `?status=`)         |
 | POST   | `/workspaces/{slug}/tasks`    | key* | create                           |
 | PUT    | `/workspaces/{slug}/tasks/{id}`| key*| update status/title/assignee     |
@@ -223,6 +232,7 @@ Environment variables (see `api/app/core/settings.py`, `mcp-server/src/client.py
 | `DATABASE_URL`      | `postgresql+asyncpg://postgres:postgres@localhost:5432/erid` | api |
 | `REDIS_URL`         | `redis://localhost:6379/0`                         | api       |
 | `EVENT_BUS_BACKEND` | `redis` (falls back to in-process if unreachable)  | api       |
+| `CORS_ORIGINS`      | `http://localhost:5173,http://localhost:8000`      | api       |
 | `API_BASE`          | `http://localhost:8000`                            | mcp-server|
 | `WORKSPACE_SLUG`    | —                                                  | mcp-server|
 | `WORKSPACE_API_KEY` | —                                                  | mcp-server|
@@ -244,7 +254,8 @@ Done (this iteration):
 - [x] Postgres FTS for `search_context` (generated `search_vector` + GIN/`pg_trgm` indexes; `websearch_to_tsquery`)
 - [x] Richer auth: per-actor keys, roles, fine-grained grants, Ed25519 (EdDSA) JWT
 - [x] Decision ↔ task linking (`decisions.task_id`) and file-watch auto-presence (`mcp-server/src/watcher.py`)
+- [x] MCP `resources` (`workspace://{slug}/{summary,tasks,decisions,presence}`) + `prompts` (`summarize_workspace`, `standup_report`, `catch_up`)
+- [x] Containerized dashboard (`web/Dockerfile`, multi-stage → nginx proxying `/api` + WS) + compose `web` service; CORS origins via `CORS_ORIGINS`
 
 Next:
 - [ ] Dashboard auth flow + workspace switcher and creation UI
-- [ ] MCP `resources`/`prompts` in addition to tools

@@ -117,9 +117,9 @@ async def delete_workspace(
     removed by the DB-level ``ON DELETE CASCADE`` on their actor FK.
     """
     workspace = principal.workspace
-    await _publish(workspace.slug, "workspace_deleted", {"slug": workspace.slug})
     await db.delete(workspace)
     await db.commit()
+    await _publish(workspace.slug, "workspace_deleted", {"slug": workspace.slug})
 
 
 @router.get("/workspaces", response_model=list[WorkspaceListItem])

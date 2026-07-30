@@ -172,6 +172,102 @@ async def update_presence(
         await client.close()
 
 
+# ---------------------------------------------------------------------------
+# Resources — read-only snapshots a client can pull into context directly.
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource(
+    "workspace://{slug}/summary",
+    name="workspace_summary_resource",
+    description="Counts and active developers for a workspace: tasks/decisions totals and who's online.",
+    mime_type="application/json",
+)
+async def summary_resource(slug: str) -> str:
+    client = APIClient()
+    try:
+        return _fmt(await client.workspace_summary(_slug(slug)))
+    finally:
+        await client.close()
+
+
+@mcp.resource(
+    "workspace://{slug}/tasks",
+    name="workspace_tasks_resource",
+    description="All tasks in a workspace (todo, in_progress, done, blocked).",
+    mime_type="application/json",
+)
+async def tasks_resource(slug: str) -> str:
+    client = APIClient()
+    try:
+        return _fmt(await client.current_tasks(_slug(slug)))
+    finally:
+        await client.close()
+
+
+@mcp.resource(
+    "workspace://{slug}/decisions",
+    name="workspace_decisions_resource",
+    description="The most recent architectural/implementation decisions in a workspace.",
+    mime_type="application/json",
+)
+async def decisions_resource(slug: str) -> str:
+    client = APIClient()
+    try:
+        return _fmt(await client.recent_decisions(_slug(slug)))
+    finally:
+        await client.close()
+
+
+@mcp.resource(
+    "workspace://{slug}/presence",
+    name="workspace_presence_resource",
+    description="Developers/agents currently active in a workspace and what they're editing.",
+    mime_type="application/json",
+)
+async def presence_resource(slug: str) -> str:
+    client = APIClient()
+    try:
+        return _fmt(await client.active_developers(_slug(slug)))
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# Prompts — ready-made conversation starters over the shared workspace state.
+# ---------------------------------------------------------------------------
+
+
+@mcp.prompt(name="summarize_workspace", description="Summarize the current state of a workspace.")
+async def summarize_workspace_prompt(slug: str | None = None) -> str:
+    resolved = _slug(slug)
+    return (
+        f"Use the workspace_summary, current_tasks, and recent_decisions tools for workspace '{resolved}', "
+        "then write a concise summary: overall health, open vs. done tasks, what was decided recently, "
+        "and anything that looks blocked or stale."
+    )
+
+
+@mcp.prompt(name="standup_report", description="Draft a standup-style report of work in a workspace.")
+async def standup_report_prompt(slug: str | None = None) -> str:
+    resolved = _slug(slug)
+    return (
+        f"Build a standup report for workspace '{resolved}'. Pull current_tasks and update_presence/"
+        "active_developers, then group by who's working on what: what each developer has in progress, "
+        "what's done since, and any blockers."
+    )
+
+
+@mcp.prompt(name="catch_up", description="Catch up an agent that just joined a workspace.")
+async def catch_up_prompt(slug: str | None = None) -> str:
+    resolved = _slug(slug)
+    return (
+        f"I just joined workspace '{resolved}' and need to catch up. Call workspace_summary and "
+        "recent_decisions, then brief me on: the project's goal as implied by open tasks, the key decisions "
+        "already made (so I don't re-litigate them), who's active, and where I could pick up work."
+    )
+
+
 if __name__ == "__main__":
     transport = "stdio"
     if "--transport" in sys.argv:

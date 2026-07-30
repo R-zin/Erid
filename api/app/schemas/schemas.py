@@ -28,6 +28,27 @@ class WorkspaceCreated(WorkspaceOut):
     api_key: str | None
 
 
+class WorkspaceListItem(WorkspaceOut):
+    """A workspace in a directory listing: ``secured`` flags whether it needs a key."""
+
+    secured: bool
+
+
+class WorkspaceSecured(BaseModel):
+    """Returned once when an open workspace is secured; the key is shown only here."""
+
+    slug: str
+    secured: bool
+    api_key: str | None
+
+
+class WorkspaceKeyRotated(BaseModel):
+    """Returned once when the workspace key rotates; the new key is shown only here."""
+
+    slug: str
+    api_key: str | None
+
+
 class DecisionIn(BaseModel):
     title: str = Field(min_length=1, max_length=512)
     reason: str | None = None

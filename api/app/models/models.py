@@ -112,7 +112,7 @@ class Task(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
     title: Mapped[str] = mapped_column(String(512))
-    assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus), default=TaskStatus.todo)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -133,7 +133,7 @@ class Decision(Base):
     title: Mapped[str] = mapped_column(String(512))
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     related_files: Mapped[str | None] = mapped_column(Text, nullable=True)
-    made_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    made_by: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     # Optional link to the task this decision informs (decision ↔ task linking).
     # SET NULL keeps the decision if the task is deleted.
     task_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -147,6 +147,8 @@ class Decision(Base):
 
 class Presence(Base):
     __tablename__ = "presence"
+    # One row per (workspace, actor): the upsert conflict target.
+    __table_args__ = (UniqueConstraint("workspace_id", "actor_name", name="uq_presence_workspace_actor"),)
 
     id: Mapped[uuid.UUID] = uuid_pk()
     workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))

@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   postgres:
     image: postgres:16
@@ -8,10 +7,12 @@ services:
       POSTGRES_DB: erid
     ports:
       - "5432:5432"
+
   redis:
     image: redis:7
     ports:
       - "6379:6379"
+
   api:
     build: ./api
     depends_on:
@@ -21,9 +22,24 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/erid
+      REDIS_URL: redis://redis:6379/0
+      # Origins the dashboard is served from (the web service on :8080).
+      CORS_ORIGINS: http://localhost:8080
+
   mcp-server:
     build: ./mcp-server
     depends_on:
       - api
     environment:
-      - API_BASE=http://api:8000
+      API_BASE: http://api:8000
+      WORKSPACE_SLUG: ${WORKSPACE_SLUG:-erid}
+      # Optional auth; pass WORKSPACE_API_KEY or WORKSPACE_TOKEN from the host env.
+      WORKSPACE_API_KEY: ${WORKSPACE_API_KEY:-}
+      WORKSPACE_TOKEN: ${WORKSPACE_TOKEN:-}
+
+  web:
+    build: ./web
+    depends_on:
+      - api
+    ports:
+      - "8080:80"

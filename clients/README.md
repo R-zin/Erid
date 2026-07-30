@@ -52,9 +52,13 @@ uv run python mcp-server/src/server.py --transport stdio
 
 ## Codex CLI
 
-In the `codex` config, set the same stdio command pointing at
-`mcp-server/src/server.py`.
+Merge `clients/codex.toml` into your Codex config (`~/.codex/config.toml`). It
+points the stdio command at `mcp-server/src/server.py` with the same env vars
+as above.
 
 Once connected, the tools `workspace_summary`, `search_context`,
 `current_tasks`, `create_task`, `update_task`, `create_decision`,
-`recent_decisions`, `active_developers`, and `update_presence` are available.
+`task_decisions`, `recent_decisions`, `active_developers`, and `update_presence`
+are available, plus read-only resources (`workspace://{slug}/summary`,
+`.../tasks`, `.../decisions`, `.../presence`) and the prompts
+`summarize_workspace`, `standup_report`, and `catch_up`.

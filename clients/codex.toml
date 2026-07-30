@@ -1,0 +1,13 @@
+# Codex CLI MCP config for the AI Context Hub.
+# Merge into your Codex config (e.g. ~/.codex/config.toml). The server reads its
+# settings from these env vars (see clients/README.md for what each means).
+
+[mcp_servers.context-hub]
+command = "uv"
+args = ["run", "python", "mcp-server/src/server.py", "--transport", "stdio"]
+
+[mcp_servers.context-hub.env]
+API_BASE = "http://localhost:8000"
+WORKSPACE_SLUG = "your-workspace"
+WORKSPACE_API_KEY = ""
+WORKSPACE_TOKEN = ""

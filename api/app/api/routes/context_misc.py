@@ -3,12 +3,8 @@
 These handlers mirror ``/search`` and ``/summary`` from ``context.py`` but are
 scoped behind ``Depends(require_action(Permission.read))`` so they resolve the
 caller's workspace via ``principal.workspace`` (auth-aware) instead of the open
-``get_or_create_workspace`` call. Moving them here keeps ``context.py`` owned by
-another change while this one hardens the two endpoints.
-
-Registered after ``context.router`` in ``app.main``; the open duplicates still
-in ``context.py`` take precedence for identical paths until the coordinator
-removes them.
+``get_or_create_workspace`` call. They are the sole handlers for these paths
+(the legacy open versions were removed from ``context.py``).
 """
 
 from datetime import UTC, datetime

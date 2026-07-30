@@ -30,9 +30,7 @@ app.add_middleware(
 )
 
 app.include_router(context.router, prefix="/api", tags=["context"])
-# context_misc re-declares /search & /summary behind auth. It must come AFTER
-# context.router so the secured routes win for identical paths while the legacy
-# open handlers remain registered (the coordinator removes those separately).
+# /search & /summary live in context_misc, scoped behind Permission.read.
 app.include_router(context_misc.router, prefix="/api", tags=["context_misc"])
 
 

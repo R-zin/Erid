@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import Column, func, or_, select
+from sqlalchemy import Column, select
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -46,10 +46,9 @@ from app.schemas.schemas import (
     WorkspaceKeyRotated,
     WorkspaceListItem,
     WorkspaceSecured,
-    WorkspaceSummary,
 )
 from app.services.event_bus import get_event_bus
-from app.services.workspace_service import get_or_create_workspace, get_workspace_by_slug
+from app.services.workspace_service import get_workspace_by_slug
 
 logger = logging.getLogger("context_hub.routes")
 
@@ -515,92 +514,6 @@ async def update_presence(
     )
     await _publish(workspace.slug, "presence_updated", PresenceOut.model_validate(presence).model_dump(mode="json"))
     return PresenceOut.model_validate(presence)
-
-
-# ---------------------------------------------------------------------------
-# Search & summary (open reads)
-# ---------------------------------------------------------------------------
-
-
-@router.get("/workspaces/{slug}/search")
-async def search_workspace(
-    slug: str,
-    q: str = Query(..., min_length=1),
-    limit: int = Query(default=20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-):
-    """Search decisions and tasks in a workspace.
-
-    On Postgres this uses full-text search over the generated ``search_vector``
-    columns (stemmed matching, ranked by relevance). On other backends (SQLite,
-    used by tests) it falls back to a substring match.
-    """
-    workspace = await get_or_create_workspace(db, slug)
-
-    if db.bind.dialect.name == "postgresql":
-        query = func.websearch_to_tsquery("english", q)
-        decisions_result = await db.execute(
-            select(Decision)
-            .where(Decision.workspace_id == workspace.id, _search_vector(Decision).op("@@")(query))
-            .order_by(func.ts_rank(_search_vector(Decision), query).desc())
-            .limit(limit)
-        )
-        tasks_result = await db.execute(
-            select(Task)
-            .where(Task.workspace_id == workspace.id, _search_vector(Task).op("@@")(query))
-            .order_by(func.ts_rank(_search_vector(Task), query).desc())
-            .limit(limit)
-        )
-    else:
-        like = f"%{q}%"
-        decisions_result = await db.execute(
-            select(Decision)
-            .where(
-                Decision.workspace_id == workspace.id,
-                or_(Decision.title.ilike(like), Decision.reason.ilike(like)),
-            )
-            .limit(limit)
-        )
-        tasks_result = await db.execute(
-            select(Task).where(Task.workspace_id == workspace.id, Task.title.ilike(like)).limit(limit)
-        )
-
-    return {
-        "query": q,
-        "decisions": [DecisionOut.model_validate(d) for d in decisions_result.scalars().all()],
-        "tasks": [TaskOut.model_validate(t) for t in tasks_result.scalars().all()],
-    }
-
-
-@router.get("/workspaces/{slug}/summary", response_model=WorkspaceSummary)
-async def workspace_summary(
-    slug: str,
-    db: AsyncSession = Depends(get_db),
-) -> WorkspaceSummary:
-    workspace = await get_or_create_workspace(db, slug)
-    tasks = (await db.execute(select(Task).where(Task.workspace_id == workspace.id))).scalars().all()
-    decisions = (await db.execute(select(Decision).where(Decision.workspace_id == workspace.id))).scalars().all()
-    presences = (
-        (
-            await db.execute(
-                select(Presence).where(
-                    Presence.workspace_id == workspace.id,
-                    Presence.last_seen > datetime.now(UTC) - STALE_AFTER,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    active_developers = sorted({p.actor_name for p in presences})
-    return WorkspaceSummary(
-        slug=workspace.slug,
-        name=workspace.name,
-        task_count=len(tasks),
-        open_task_count=sum(1 for t in tasks if t.status != TaskStatus.done),
-        decision_count=len(decisions),
-        active_developers=active_developers,
-    )
 
 
 # ---------------------------------------------------------------------------

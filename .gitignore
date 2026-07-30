@@ -19,3 +19,4 @@ web/dist/
 
 # local data
 *.db
+dump.rdb

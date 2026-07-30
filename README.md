@@ -108,24 +108,61 @@ claude mcp add context-hub \
 
 Then the tools are available in-session: `workspace_summary`, `search_context`,
 `current_tasks`, `create_task`, `update_task`, `create_decision`,
-`recent_decisions`, `active_developers`, `update_presence`.
+`recent_decisions`, `active_developers`, `update_presence`, `task_decisions`.
+
+## Auto-presence (file watch)
+
+`mcp-server/src/watcher.py` keeps "who's working on what" current without manual
+`update_presence` calls: it polls a directory (your repo) for the most recently
+modified source file and posts it as your `current_file` presence heartbeat.
+
+```bash
+WORKSPACE_SLUG=your-workspace WORKSPACE_API_KEY=$KEY \
+  uv run python mcp-server/src/watcher.py   # add & to background it
+```
+
+Config: `WATCH_ROOT` (default cwd), `WATCH_INTERVAL` seconds (default 15),
+`PRESENCE_NAME` (default: your git `user.name`, else `$USER`). It reuses the
+same `API_BASE`/`WORKSPACE_API_KEY`/`WORKSPACE_TOKEN` env as the MCP client, and
+ignores VCS internals, caches, hidden files, and build output.
 
 ## Authentication
 
-One API key per workspace (intentionally minimal — full JWT/OAuth is on the
-roadmap).
+Workspaces are **open** (no auth) until secured. Once secured, requests
+authenticate as a **principal** carrying fine-grained **permissions**. Three
+credential shapes are accepted:
 
-- `POST /api/workspaces?slug=NAME` creates a workspace and returns its key
-  **once** (it is never re-disclosed).
-- A workspace touched first via a normal read/write auto-creates **open**
-  (no key) so onboarding is frictionless; secure it by provisioning explicitly.
-- Send the key as the `X-API-Key` header for REST, or `?api_key=...` on the
-  WebSocket (browsers can't set WS headers).
+- **Legacy workspace key** — the original shared `workspaces.api_key`; maps to
+  full access (owner). Existing setups keep working.
+- **Per-actor key** — each actor (person/bot) gets its own key, scoped by role +
+  grants. Only its SHA-256 is stored; it's disclosed **once** at minting.
+- **JWT (Ed25519)** — exchange a key for a short-lived bearer token at the login
+  endpoint; send as `Authorization: Bearer <jwt>`.
+
+**Roles:** `reader` (read-only) → `writer` (read + write tasks/decisions/
+presence) → `owner` (writer + mint/revoke keys, manage actors). Grants give
+per-resource control: `read`, `write_tasks`, `write_decisions`, `presence`,
+`admin_keys`, `owner` (implies all). An actor's permissions are its role defaults
+plus any explicit grants.
 
 ```bash
+# Provision a workspace (returns the legacy/owner key once)
 KEY=$(curl -s -XPOST 'http://localhost:8000/api/workspaces?slug=myproj' | jq -r .api_key)
-curl -H "X-API-Key: $KEY" http://localhost:8000/api/workspaces/myproj/tasks
+
+# Mint a per-actor writer (admin only); raw key shown once
+ACTOR=$(curl -s -XPOST -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+  'http://localhost:8000/api/workspaces/myproj/actors' -d '{"name":"claude","role":"writer"}' | jq -r .api_key)
+
+# Exchange for a JWT, then use it
+TOKEN=$(curl -s -XPOST -H 'Content-Type: application/json' \
+  'http://localhost:8000/api/workspaces/myproj/token' -d "{\"api_key\":\"$ACTOR\"}" | jq -r .access_token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/workspaces/myproj/tasks
 ```
+
+Send a key as the `X-API-Key` header for REST, or `?api_key=...` / `?token=...`
+on the WebSocket (browsers can't set WS headers). JWT Ed25519 keys come from
+`ERID_JWT_PRIVATE_KEY`/`ERID_JWT_PUBLIC_KEY` (PEM); an ephemeral pair is
+generated if unset (tokens then die on restart — set them in production).
 
 ## REST API
 
@@ -144,9 +181,16 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | POST   | `/workspaces/{slug}/decisions`| key* | record a decision                |
 | GET    | `/workspaces/{slug}/presence` | key* | active collaborators             |
 | POST   | `/workspaces/{slug}/presence` | key* | presence heartbeat (upsert)      |
+| POST   | `/workspaces/{slug}/actors`   | admin| mint per-actor key (shown once)  |
+| GET    | `/workspaces/{slug}/actors`   | admin| list actors (never keys)         |
+| DELETE | `/workspaces/{slug}/actors/{id}`| admin | revoke an actor                |
+| POST   | `/workspaces/{slug}/token`    | key* | exchange a key for a JWT         |
 | WS     | `/workspaces/{slug}/ws`       | key* | real-time event stream           |
 
 \* only when the workspace has a key configured; open workspaces skip auth.
+`admin` requires the `admin_keys` permission (owner or a granted admin). Each
+route enforces a specific permission (`read`/`write_tasks`/`write_decisions`/
+`presence`); a key/token must carry it.
 
 ## Real-time events
 
@@ -196,12 +240,11 @@ Done (this iteration):
 - [x] Single API-key-per-workspace auth
 - [x] Live React dashboard (presence, tasks, decisions)
 - [x] Integration tests (API routes, WebSocket, MCP round-trip)
+- [x] Alembic migrations (`upgrade head` on startup; tests/SQLite use `create_all`)
+- [x] Postgres FTS for `search_context` (generated `search_vector` + GIN/`pg_trgm` indexes; `websearch_to_tsquery`)
+- [x] Richer auth: per-actor keys, roles, fine-grained grants, Ed25519 (EdDSA) JWT
+- [x] Decision ↔ task linking (`decisions.task_id`) and file-watch auto-presence (`mcp-server/src/watcher.py`)
 
 Next:
-
-- [ ] Alembic migrations (replace startup `create_all`)
-- [ ] Postgres `citext`/full-text indexes for `search_context`
-- [ ] Richer auth: per-actor keys, roles, JWT/OAuth
-- [ ] Decision ↔ task linking and file-watch auto-presence
 - [ ] Dashboard auth flow + workspace switcher and creation UI
 - [ ] MCP `resources`/`prompts` in addition to tools

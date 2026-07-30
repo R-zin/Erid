@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from app.models.models import TaskStatus
+from app.models.models import ActorRole, Permission, TaskStatus
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -33,6 +33,7 @@ class DecisionIn(BaseModel):
     reason: str | None = None
     related_files: str | None = None
     made_by: str | None = None
+    task_id: uuid.UUID | None = None  # link this decision to a task
 
 
 class DecisionOut(BaseModel):
@@ -43,6 +44,7 @@ class DecisionOut(BaseModel):
     reason: str | None
     related_files: str | None
     made_by: str | None
+    task_id: uuid.UUID | None
     created_at: datetime
 
 
@@ -87,3 +89,44 @@ class PresenceOut(BaseModel):
     current_file: str | None
     current_task: str | None
     last_seen: datetime
+
+
+# ---------------------------------------------------------------------------
+# Actors, access grants, and tokens
+# ---------------------------------------------------------------------------
+
+
+class ActorIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    role: ActorRole = ActorRole.writer
+    permissions: list[Permission] | None = None  # defaults to the role's grants
+
+
+class ActorOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    role: ActorRole
+    active: bool
+    created_at: datetime
+
+
+class ActorToken(BaseModel):
+    """Minted bearer token for an actor (returned from the login endpoint)."""
+
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class TokenRequest(BaseModel):
+    """Login: exchange an actor (or legacy workspace) API key for a JWT."""
+
+    api_key: str = Field(min_length=1)
+
+
+class ActorCreated(ActorOut):
+    """Returned once at minting; the raw API key is shown only here."""
+
+    api_key: str | None

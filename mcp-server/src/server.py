@@ -105,16 +105,29 @@ async def create_decision(
     reason: str | None = None,
     related_files: str | None = None,
     made_by: str | None = None,
+    task_id: str | None = None,
     slug: str | None = None,
 ) -> str:
-    """Record an architectural/implementation decision so every tool can see it."""
+    """Record an architectural/implementation decision so every tool can see it.
+
+    Optionally link it to a task by passing that task's id as ``task_id``."""
     client = APIClient()
     try:
         return _fmt(
             await client.create_decision(
-                _slug(slug), title, reason=reason, related_files=related_files, made_by=made_by
+                _slug(slug), title, reason=reason, related_files=related_files, made_by=made_by, task_id=task_id
             )
         )
+    finally:
+        await client.close()
+
+
+@mcp.tool()
+async def task_decisions(task_id: str, slug: str | None = None) -> str:
+    """List the decisions linked to a task (decision ↔ task linking)."""
+    client = APIClient()
+    try:
+        return _fmt(await client.task_decisions(_slug(slug), task_id))
     finally:
         await client.close()
 

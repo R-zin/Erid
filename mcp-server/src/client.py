@@ -4,8 +4,10 @@ Configuration comes from the environment so the same client works whether the
 MCP server runs in Docker (against the ``api`` service) or is launched over
 stdio by a local tool (against ``localhost``):
 
-- ``API_BASE``      base URL of the REST API (default ``http://localhost:8000``)
-- ``WORKSPACE_API_KEY``  workspace API key, sent as the ``X-API-Key`` header
+- ``API_BASE``         base URL of the REST API (default ``http://localhost:8000``)
+- ``WORKSPACE_API_KEY``  workspace or actor API key, sent as the ``X-API-Key`` header
+- ``WORKSPACE_TOKEN``    optional JWT access token (from the login endpoint),
+                         sent as ``Authorization: Bearer`` and takes precedence
 """
 
 import os
@@ -14,14 +16,28 @@ import httpx
 
 API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
 API_KEY = os.environ.get("WORKSPACE_API_KEY", "")
+TOKEN = os.environ.get("WORKSPACE_TOKEN", "")
 
 
 class APIClient:
-    def __init__(self, base_url: str | None = None, api_key: str | None = None, timeout: float = 15.0) -> None:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        token: str | None = None,
+        timeout: float = 15.0,
+    ) -> None:
         base = (base_url or API_BASE).rstrip("/")
         self._root = f"{base}/api/workspaces"
-        headers = {"X-API-Key": api_key if api_key is not None else API_KEY}
-        self._client = httpx.AsyncClient(headers={k: v for k, v in headers.items() if v}, timeout=timeout)
+        # A bearer token takes precedence over a raw key when both are set.
+        tok = token if token is not None else TOKEN
+        key = api_key if api_key is not None else API_KEY
+        headers = {}
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        elif key:
+            headers["X-API-Key"] = key
+        self._client = httpx.AsyncClient(headers=headers, timeout=timeout)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -87,11 +103,17 @@ class APIClient:
         reason: str | None = None,
         related_files: str | None = None,
         made_by: str | None = None,
+        task_id: str | None = None,
     ):
-        r = await self._client.post(
-            self._url(slug, "/decisions"),
-            json={"title": title, "reason": reason, "related_files": related_files, "made_by": made_by},
-        )
+        body = {"title": title, "reason": reason, "related_files": related_files, "made_by": made_by}
+        if task_id is not None:
+            body["task_id"] = task_id
+        r = await self._client.post(self._url(slug, "/decisions"), json=body)
+        r.raise_for_status()
+        return r.json()
+
+    async def task_decisions(self, slug: str, task_id: str):
+        r = await self._client.get(self._url(slug, f"/tasks/{task_id}/decisions"))
         r.raise_for_status()
         return r.json()
 

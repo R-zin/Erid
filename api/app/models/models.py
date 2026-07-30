@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,6 +20,39 @@ class TaskStatus(str, enum.Enum):
     blocked = "blocked"
 
 
+class ActorRole(str, enum.Enum):
+    """Coarse identity tier for an actor. Grants fine-tune below this."""
+
+    reader = "reader"  # read-only
+    writer = "writer"  # read + write tasks/decisions/presence
+    owner = "owner"  # writer + mint/revoke keys, manage actors
+
+
+class Permission(str, enum.Enum):
+    """Fine-grained, per-resource actions a principal may be granted.
+
+    Each API route / WS declares the action it requires; a principal may act
+    when it holds the matching permission (``owner`` implies all).
+    """
+
+    read = "read"  # tasks/decisions/summary/search/presence reads
+    write_tasks = "write_tasks"  # create/update tasks
+    write_decisions = "write_decisions"  # create decisions
+    presence = "presence"  # update presence heartbeat
+    admin_keys = "admin_keys"  # mint/revoke actor keys, manage roles/grants
+    owner = "owner"  # full access; implies every other permission
+
+
+# Default grants per role. ``owner`` needs no explicit grants: it implies all.
+ROLE_GRANTS: dict[ActorRole, frozenset[Permission]] = {
+    ActorRole.reader: frozenset({Permission.read}),
+    ActorRole.writer: frozenset(
+        {Permission.read, Permission.write_tasks, Permission.write_decisions, Permission.presence}
+    ),
+    ActorRole.owner: frozenset(),  # implies everything
+}
+
+
 class Workspace(Base):
     __tablename__ = "workspaces"
 
@@ -34,6 +67,43 @@ class Workspace(Base):
     tasks: Mapped[list[Task]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     decisions: Mapped[list[Decision]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     presences: Mapped[list[Presence]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    actors: Mapped[list[Actor]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+
+
+class Actor(Base):
+    """A named identity in a workspace with its own key and access grants.
+
+    The raw key is never stored — only a SHA-256 hash — and is disclosed once at
+    minting. ``role`` gives a coarse tier; explicit ``grants`` fine-tune access.
+    """
+
+    __tablename__ = "actors"
+    __table_args__ = (UniqueConstraint("workspace_id", "name", name="uq_actors_workspace_name"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    role: Mapped[ActorRole] = mapped_column(Enum(ActorRole), default=ActorRole.writer)
+    # SHA-256 hex digest of the raw API key; NULL for actors that only use JWT.
+    key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped[Workspace] = relationship(back_populates="actors")
+    grants: Mapped[list[Grant]] = relationship(back_populates="actor", cascade="all, delete-orphan", lazy="selectin")
+
+
+class Grant(Base):
+    """A single permission granted to an actor (fine-grained, per-resource)."""
+
+    __tablename__ = "actor_grants"
+    __table_args__ = (UniqueConstraint("actor_id", "permission", name="uq_grants_actor_permission"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id", ondelete="CASCADE"), index=True)
+    permission: Mapped[Permission] = mapped_column(Enum(Permission))
+
+    actor: Mapped[Actor] = relationship(back_populates="grants")
 
 
 class Task(Base):
@@ -51,6 +121,8 @@ class Task(Base):
     )
 
     workspace: Mapped[Workspace] = relationship(back_populates="tasks")
+    # Decisions linked to this task (decision ↔ task linking).
+    decisions: Mapped[list[Decision]] = relationship(back_populates="task")
 
 
 class Decision(Base):
@@ -62,9 +134,15 @@ class Decision(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     related_files: Mapped[str | None] = mapped_column(Text, nullable=True)
     made_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Optional link to the task this decision informs (decision ↔ task linking).
+    # SET NULL keeps the decision if the task is deleted.
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     workspace: Mapped[Workspace] = relationship(back_populates="decisions")
+    task: Mapped[Task | None] = relationship(back_populates="decisions", foreign_keys=[task_id])
 
 
 class Presence(Base):

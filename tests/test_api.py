@@ -107,6 +107,35 @@ async def test_decision_create_and_list(client):
     assert all(d["made_by"] == "me" for d in all_decisions)
 
 
+async def test_decision_task_linking(client):
+    slug = "link-ws"
+    task = (await client.post(f"/api/workspaces/{slug}/tasks", json={"title": "migrate db"})).json()
+
+    decision = (
+        await client.post(
+            f"/api/workspaces/{slug}/decisions",
+            json={"title": "use alembic", "reason": "versioned schema", "task_id": task["id"]},
+        )
+    ).json()
+    assert decision["task_id"] == task["id"]
+
+    # The task now exposes its linked decisions.
+    linked = (await client.get(f"/api/workspaces/{slug}/tasks/{task['id']}/decisions")).json()
+    assert [d["id"] for d in linked] == [decision["id"]]
+
+    # An unlinked decision has task_id null.
+    other = (await client.post(f"/api/workspaces/{slug}/decisions", json={"title": "standalone"})).json()
+    assert other["task_id"] is None
+
+
+async def test_decision_link_requires_existing_task(client):
+    import uuid
+
+    slug = "link-ws2"
+    r = await client.post(f"/api/workspaces/{slug}/decisions", json={"title": "dangling", "task_id": str(uuid.uuid4())})
+    assert r.status_code == 404
+
+
 # --- presence ---------------------------------------------------------------
 
 

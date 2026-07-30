@@ -255,7 +255,13 @@ Done (this iteration):
 - [x] Richer auth: per-actor keys, roles, fine-grained grants, Ed25519 (EdDSA) JWT
 - [x] Decision ↔ task linking (`decisions.task_id`) and file-watch auto-presence (`mcp-server/src/watcher.py`)
 - [x] MCP `resources` (`workspace://{slug}/{summary,tasks,decisions,presence}`) + `prompts` (`summarize_workspace`, `standup_report`, `catch_up`)
-- [x] Containerized dashboard (`web/Dockerfile`, multi-stage → nginx proxying `/api` + WS) + compose `web` service; CORS origins via `CORS_ORIGINS`
+- [x] Containerized dashboard (`web/Dockerfile`, multi-stage → nginx proxying `/api` + WS) + compose `web` service; CORS origins via `CORS_ORIGINS` (`docker compose up` not yet verified — env had no docker CLI)
+- [x] `/search` + `/summary` scoped behind the `read` permission (`context_misc.py`)
+- [x] Presence atomic upsert (`INSERT … ON CONFLICT`) + `uq_presence_workspace_actor`, `decisions.made_by` / `tasks.assigned_to` indexes
+- [x] DELETE endpoints (`/tasks/{id}` → `write_tasks`, `/decisions/{id}` → `write_decisions`, `/workspaces/{slug}` → owner, cascading)
+- [x] Workspace management (`GET /workspaces` directory, `POST /{slug}/secure` claim, `POST /{slug}/rotate-key`)
+- [x] Dashboard auth flow (per-workspace key/token, persisted) + workspace switcher + quick task-create form
+- [x] Test sweep: WS-auth happy/negative, non-decision event payloads, edge cases, MCP client error paths (90 tests)
+- [x] Codex CLI config (`clients/codex.toml`); empty `mcp-server/src/tools/` stubs removed
 
-Next:
-- [ ] Dashboard auth flow + workspace switcher and creation UI
+All roadmap items complete. Future ideas (not scoped): OAuth providers, multi-instance MCP resources, dashboard decision-create UI, deploy/CI verification of the compose stack.

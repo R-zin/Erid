@@ -333,7 +333,10 @@ class HubBridge:
         if self._ws is not None:
             with contextlib.suppress(Exception):
                 await self._ws.close()
-        await self.client.close()
+        # Bound the client close: httpx's anyio cancel-scope teardown must complete
+        # for the loop to exit, and a stuck close shouldn't strand a spawned child.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.client.close(), timeout=5)
 
     def request_shutdown(self) -> None:
         """Signal-safe shutdown trigger (SIGTERM/SIGINT handlers)."""
@@ -370,10 +373,13 @@ class HubBridge:
                 pending.add(task)
                 task.add_done_callback(pending.discard)
         finally:
-            if not self._shutdown.is_set():
-                await self._teardown()
             if pending:
+                # Let in-flight handler responses drain (shutdown's ``{"result": null}``).
                 await asyncio.gather(*pending, return_exceptions=True)
+            # Tear down inside the loop BEFORE returning so ``client.aclose()``'s
+            # anyio cancel scope always unwinds — otherwise an abandoned aclose can
+            # leave the loop alive and ``asyncio.run()`` never returns (idle process).
+            await self._teardown()
         return 0
 
 

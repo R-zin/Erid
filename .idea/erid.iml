@@ -2,7 +2,11 @@
 <module external.system.id="pyproject.toml" type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/.claude/worktrees/agent-a6c15e8a4d395a9c4/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/.claude/worktrees/agent-a9cf4b850adbd1ed4/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/.claude/worktrees/agent-ac6e3e72e73185f4e/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/.claude/worktrees/agent-a419aed24c6b5d8eb/.venv" />
     </content>
     <orderEntry type="jdk" jdkName="uv (Erid)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

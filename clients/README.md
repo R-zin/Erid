@@ -50,6 +50,35 @@ In Cursor MCP settings, add the command from `clients/cursor.yaml`:
 uv run python mcp-server/src/server.py --transport stdio
 ```
 
+Cursor reads MCP config from `.cursor/mcp.json` (project) or `~/.cursor/mcp.json`
+(global), top-level key `mcpServers` — same inner shape as `claude_code.json`.
+
+## VS Code
+
+VS Code reads workspace MCP servers from `.vscode/mcp.json`, top-level key
+`servers` (note: **`servers`**, not `mcpServers`):
+
+```json
+{
+  "servers": {
+    "context-hub": {
+      "command": "uv",
+      "args": ["run", "python", "mcp-server/src/server.py", "--transport", "stdio"],
+      "env": {
+        "API_BASE": "http://localhost:8000",
+        "WORKSPACE_SLUG": "your-workspace",
+        "WORKSPACE_API_KEY": "",
+        "WORKSPACE_TOKEN": ""
+      }
+    }
+  }
+}
+```
+
+The VS Code extension (`editors/vscode/`) writes this for you via the
+`AI Context Hub: Setup MCP` command (merging existing servers, leaving the secret
+values blank for you to fill in).
+
 ## Codex CLI
 
 Merge `clients/codex.toml` into your Codex config (`~/.codex/config.toml`). It

@@ -55,6 +55,8 @@ real-time feed, so:
 | ------------ | --------------------------------------------------------------------- |
 | `api/`       | FastAPI + Postgres. State, REST routes, and the WebSocket event feed. |
 | `mcp-server/`| MCP server exposing the state as tools to AI clients (stdio or HTTP). |
+| `mcp-server/src/bridge.py` | stdio JSON-RPC bridge editor plugins spawn (owns all hub I/O). |
+| `editors/vscode/` | VS Code/Cursor extension: live sidebar, quick actions, auto-presence, MCP setup. |
 | `clients/`   | Ready-made MCP configs for Claude Code, Cursor, Codex CLI.            |
 | `web/`       | React dashboard: live presence, open tasks, recent decisions over WS. |
 | `tests/`     | Integration tests for the API routes + WebSocket (pytest + httpx).    |
@@ -134,6 +136,40 @@ Config: `WATCH_ROOT` (default cwd), `WATCH_INTERVAL` seconds (default 15),
 `PRESENCE_NAME` (default: your git `user.name`, else `$USER`). It reuses the
 same `API_BASE`/`WORKSPACE_API_KEY`/`WORKSPACE_TOKEN` env as the MCP client, and
 ignores VCS internals, caches, hidden files, and build output.
+
+## Editor plugin (VS Code / Cursor)
+
+`editors/vscode/` is an installable extension that brings the hub's core features
+into the editor for a **human**, alongside the AI-facing MCP server. One `.vsix`
+installs into VS Code, Cursor, and other VS Code forks. It provides:
+
+- **Live sidebar** — Tasks, Decisions, and Presence views (in an Activity-bar
+  container) that update in real time over the hub's WebSocket, plus a
+  summary/live-status item.
+- **Quick actions** — create / complete / delete tasks, record decisions
+  (pre-filling `related_files` with the current file and optionally linking a
+  task), and search the workspace, all from the command palette.
+- **Auto-presence** — heartbeats "you're editing `<file>`" as a `human` actor
+  (240s cadence, mirroring `watcher.py`), so collaborators and agents see you.
+- **MCP auto-setup** — `AI Context Hub: Setup MCP` writes `.vscode/mcp.json` (or
+  the Cursor equivalent) so the editor's AI agent shares the same hub.
+
+The extension never talks to the API directly. It spawns
+`uv run python mcp-server/src/bridge.py` (from `contextHub.repoPath`, default
+`${workspaceFolder}`) — a stdio **JSON-RPC bridge** that owns the HTTP + WebSocket
+connection and reuses the same `APIClient` as the MCP server. Install it:
+
+```bash
+cd editors/vscode && npm install && npm run compile && npx vsce package
+# then "Extensions: Install from VSIX…" the produced .vsix
+```
+
+Settings: `contextHub.apiBase` (default `http://localhost:8000`),
+`contextHub.workspaceSlug`, `contextHub.actorName`, `contextHub.autoPresence`,
+`contextHub.heartbeatSeconds`, `contextHub.repoPath`. The API key/token live in
+the editor's SecretStorage (set via `AI Context Hub: Connect`), never in
+`settings.json` or written into `mcp.json`. The same bridge protocol is designed
+to back a future JetBrains plugin.
 
 ## Authentication
 

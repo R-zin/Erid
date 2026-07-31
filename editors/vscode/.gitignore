@@ -1,0 +1,5 @@
+# Build artifacts and dependencies are not committed
+node_modules/
+dist/
+*.vsix
+*.tsbuildinfo

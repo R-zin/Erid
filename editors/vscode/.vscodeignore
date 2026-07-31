@@ -1,0 +1,18 @@
+# Dev/source files that must not ship in the .vsix
+.vscode/**
+.vscode-test/**
+node_modules/**
+src/**
+**/tsconfig.json
+**/.vscodeignore
+**/tsconfig.tsbuildinfo
+*.map
+**/*.map
+.gitignore
+.git/**
+.github/**
+esbuild.config.*
+**/*.test.ts
+**/*.ts
+!dist/**
+package-lock.json

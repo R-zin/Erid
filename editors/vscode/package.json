@@ -1,0 +1,240 @@
+{
+  "name": "ai-context-hub",
+  "displayName": "AI Context Hub",
+  "description": "Live shared workspace context (tasks, decisions, presence) in your editor. Connects to an AI Context Hub backend over a local Python hub-bridge subprocess.",
+  "version": "0.1.0",
+  "publisher": "ai-context-hub",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/R-zin/Erid",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization",
+    "Collaboration"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "contextHub",
+          "title": "AI Context Hub",
+          "icon": "resources/contextHub.svg"
+        }
+      ]
+    },
+    "views": {
+      "contextHub": [
+        {
+          "id": "contextHub.tasks",
+          "name": "Tasks",
+          "contextualTitle": "Tasks"
+        },
+        {
+          "id": "contextHub.decisions",
+          "name": "Decisions",
+          "contextualTitle": "Decisions"
+        },
+        {
+          "id": "contextHub.presence",
+          "name": "Presence",
+          "contextualTitle": "Presence"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "contextHub.connect",
+        "title": "Connect",
+        "category": "AI Context Hub"
+      },
+      {
+        "command": "contextHub.disconnect",
+        "title": "Disconnect",
+        "category": "AI Context Hub"
+      },
+      {
+        "command": "contextHub.refresh",
+        "title": "Refresh",
+        "category": "AI Context Hub",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "contextHub.createTask",
+        "title": "New Task",
+        "category": "AI Context Hub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "contextHub.completeTask",
+        "title": "Complete Task",
+        "category": "AI Context Hub",
+        "icon": "$(check)"
+      },
+      {
+        "command": "contextHub.deleteTask",
+        "title": "Delete Task",
+        "category": "AI Context Hub",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "contextHub.createDecision",
+        "title": "New Decision",
+        "category": "AI Context Hub",
+        "icon": "$(add)"
+      },
+      {
+        "command": "contextHub.deleteDecision",
+        "title": "Delete Decision",
+        "category": "AI Context Hub",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "contextHub.search",
+        "title": "Search Context",
+        "category": "AI Context Hub",
+        "icon": "$(search)"
+      },
+      {
+        "command": "contextHub.setupMcp",
+        "title": "Set Up MCP Config",
+        "category": "AI Context Hub",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "contextHub.showOutput",
+        "title": "Show Output",
+        "category": "AI Context Hub",
+        "icon": "$(output)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "contextHub.createTask",
+          "when": "view == contextHub.tasks",
+          "group": "navigation@1"
+        },
+        {
+          "command": "contextHub.createDecision",
+          "when": "view == contextHub.decisions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "contextHub.refresh",
+          "when": "view =~ /^contextHub\\.(tasks|decisions|presence)$/",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "contextHub.completeTask",
+          "when": "view == contextHub.tasks && viewItem == task",
+          "group": "inline@1"
+        },
+        {
+          "command": "contextHub.deleteTask",
+          "when": "view == contextHub.tasks && viewItem == task",
+          "group": "inline@2"
+        },
+        {
+          "command": "contextHub.completeTask",
+          "when": "view == contextHub.tasks && viewItem == task",
+          "group": "context@1"
+        },
+        {
+          "command": "contextHub.deleteTask",
+          "when": "view == contextHub.tasks && viewItem == task",
+          "group": "context@2"
+        },
+        {
+          "command": "contextHub.deleteDecision",
+          "when": "view == contextHub.decisions && viewItem == decision",
+          "group": "inline@1"
+        },
+        {
+          "command": "contextHub.deleteDecision",
+          "when": "view == contextHub.decisions && viewItem == decision",
+          "group": "context@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "contextHub.completeTask",
+          "when": "false"
+        },
+        {
+          "command": "contextHub.deleteTask",
+          "when": "false"
+        },
+        {
+          "command": "contextHub.deleteDecision",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Context Hub",
+      "properties": {
+        "contextHub.apiBase": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL of the AI Context Hub REST API."
+        },
+        "contextHub.workspaceSlug": {
+          "type": "string",
+          "default": "",
+          "description": "Slug of the workspace to connect to."
+        },
+        "contextHub.actorName": {
+          "type": "string",
+          "default": "",
+          "description": "Name used for your own presence entries. Falls back to `git config user.name`, then the OS username."
+        },
+        "contextHub.autoPresence": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically report the active file as your presence."
+        },
+        "contextHub.heartbeatSeconds": {
+          "type": "number",
+          "default": 240,
+          "minimum": 15,
+          "description": "Interval in seconds between presence heartbeats. Must stay below the 10-minute staleness window."
+        },
+        "contextHub.repoPath": {
+          "type": "string",
+          "default": "${workspaceFolder}",
+          "description": "Repository root that contains `mcp-server/` and the root `pyproject.toml`; used as the working directory when spawning the hub bridge."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^2.19.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0"
+  },
+  "overrides": {
+    "fs-extra": "^11.2.0"
+  }
+}

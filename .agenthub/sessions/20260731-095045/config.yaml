@@ -1,0 +1,5 @@
+session_id: 20260731-095045
+task: "AI Context Hub editor plugin: (A) Python client+stdio hub-bridge + pytest; (B) VS Code-family extension. Split-worktree build landing on feature/extension."
+agent_count: 2
+base_branch: feature/extension
+created: 2026-07-31T04:20:45.318750+00:00

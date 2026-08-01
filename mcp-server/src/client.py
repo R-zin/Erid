@@ -28,19 +28,27 @@ class APIClient:
         timeout: float = 15.0,
     ) -> None:
         base = (base_url or API_BASE).rstrip("/")
+        self._base = base
         self._root = f"{base}/api/workspaces"
         # A bearer token takes precedence over a raw key when both are set.
-        tok = token if token is not None else TOKEN
-        key = api_key if api_key is not None else API_KEY
+        self._token = token if token is not None else TOKEN
+        self._api_key = api_key if api_key is not None else API_KEY
         headers = {}
-        if tok:
-            headers["Authorization"] = f"Bearer {tok}"
-        elif key:
-            headers["X-API-Key"] = key
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        elif self._api_key:
+            headers["X-API-Key"] = self._api_key
         self._client = httpx.AsyncClient(headers=headers, timeout=timeout)
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    def _resolve_credentials(self) -> tuple[str, str]:
+        """Return ``(token, api_key)`` exactly as configured (token wins elsewhere).
+
+        Used by the bridge to build a WS credential query param mirroring the
+        header precedence above (the WS endpoint can't take headers)."""
+        return self._token, self._api_key
 
     def _url(self, slug: str, path: str = "") -> str:
         return f"{self._root}/{slug}{path}"
@@ -51,8 +59,17 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
-    async def search_context(self, slug: str, q: str):
-        r = await self._client.get(self._url(slug, "/search"), params={"q": q})
+    async def search_context(self, slug: str, q: str, limit: int | None = None):
+        params: dict[str, object] = {"q": q}
+        if limit is not None:
+            params["limit"] = limit
+        r = await self._client.get(self._url(slug, "/search"), params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def list_workspaces(self) -> list:
+        # No-slug root listing of all workspaces (open endpoint).
+        r = await self._client.get(f"{self._base}/api/workspaces")
         r.raise_for_status()
         return r.json()
 
@@ -95,6 +112,16 @@ class APIClient:
         r = await self._client.put(self._url(slug, f"/tasks/{task_id}"), json=body)
         r.raise_for_status()
         return r.json()
+
+    async def delete_task(self, slug: str, task_id: str) -> None:
+        r = await self._client.delete(self._url(slug, f"/tasks/{task_id}"))
+        r.raise_for_status()
+        return None  # 204 No Content — no body to parse
+
+    async def delete_decision(self, slug: str, decision_id: str) -> None:
+        r = await self._client.delete(self._url(slug, f"/decisions/{decision_id}"))
+        r.raise_for_status()
+        return None  # 204 No Content — no body to parse
 
     async def create_decision(
         self,

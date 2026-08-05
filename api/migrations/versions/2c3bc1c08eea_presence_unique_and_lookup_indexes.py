@@ -38,7 +38,9 @@ def upgrade() -> None:
     # SQLite cannot ALTER a table to add a constraint, so use batch mode
     # (copy-and-move) for the presence unique constraint; on Postgres the batch
     # context is a thin wrapper around a plain ALTER TABLE.
-        sa.text("DELETE FROM presence WHERE id NOT IN (SELECT id FROM presence WHERE (workspace_id, actor_name, last_seen) IN (SELECT workspace_id, actor_name, MAX(last_seen) FROM presence GROUP BY workspace_id, actor_name))")
+    with op.batch_alter_table("presence") as batch_op:
+        batch_op.create_unique_constraint("uq_presence_workspace_actor", ["workspace_id", "actor_name"])
+    op.create_index(op.f("ix_decisions_made_by"), "decisions", ["made_by"], unique=False)
     op.create_index(op.f("ix_tasks_assigned_to"), "tasks", ["assigned_to"], unique=False)
 
 

@@ -7,17 +7,31 @@ services:
       POSTGRES_DB: erid
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   redis:
     image: redis:7
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   api:
     build: ./api
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8000:8000"
     environment:
@@ -25,11 +39,35 @@ services:
       REDIS_URL: redis://redis:6379/0
       # Origins the dashboard is served from (the web service on :8080).
       CORS_ORIGINS: http://localhost:8080
+      # Auth/secrets passed through from the host env (see .env.example). These
+      # are read by api/app/core/settings.py and the OAuth endpoints.
+      ERID_JWT_PRIVATE_KEY: ${ERID_JWT_PRIVATE_KEY:-}
+      ERID_JWT_PUBLIC_KEY: ${ERID_JWT_PUBLIC_KEY:-}
+      ERID_SESSION_SECRET: ${ERID_SESSION_SECRET:-}
+      ERID_OAUTH_GOOGLE_CLIENT_ID: ${ERID_OAUTH_GOOGLE_CLIENT_ID:-}
+      ERID_OAUTH_GOOGLE_CLIENT_SECRET: ${ERID_OAUTH_GOOGLE_CLIENT_SECRET:-}
+      ERID_OAUTH_GITHUB_CLIENT_ID: ${ERID_OAUTH_GITHUB_CLIENT_ID:-}
+      ERID_OAUTH_GITHUB_CLIENT_SECRET: ${ERID_OAUTH_GITHUB_CLIENT_SECRET:-}
+      ERID_OAUTH_REDIRECT_BASE: ${ERID_OAUTH_REDIRECT_BASE:-http://localhost:8000}
+      ERID_OAUTH_WEB_BASE: ${ERID_OAUTH_WEB_BASE:-http://localhost:8080}
+    # No curl in the python:3.14-slim image; probe /health with baked-in Python
+    # instead. Single-quoted YAML string keeps the embedded double quotes intact.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'python -c "import urllib.request,sys; urllib.request.urlopen(\"http://localhost:8000/health\"); sys.exit(0)" || exit 1'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   mcp-server:
     build: ./mcp-server
     depends_on:
       - api
+    # stdio MCP worker (one per editor/agent), not part of the default web
+    # stack. Start it explicitly with `docker compose --profile mcp up -d`.
+    profiles: ["mcp"]
     environment:
       API_BASE: http://api:8000
       WORKSPACE_SLUG: ${WORKSPACE_SLUG:-erid}
@@ -40,6 +78,7 @@ services:
   web:
     build: ./web
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "8080:80"

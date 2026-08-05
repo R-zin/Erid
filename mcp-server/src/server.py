@@ -172,6 +172,19 @@ async def update_presence(
         await client.close()
 
 
+@mcp.tool()
+async def list_workspaces() -> str:
+    """List every workspace on the hub (slug, name, created_at, secured).
+
+    Use this to discover workspace slugs before auditing more than one.
+    Tool-only counterpart of the ``workspace://index`` resource."""
+    client = APIClient()
+    try:
+        return _fmt(await client.list_workspaces())
+    finally:
+        await client.close()
+
+
 # ---------------------------------------------------------------------------
 # Resources — read-only snapshots a client can pull into context directly.
 # ---------------------------------------------------------------------------
@@ -229,6 +242,20 @@ async def presence_resource(slug: str) -> str:
     client = APIClient()
     try:
         return _fmt(await client.active_developers(_slug(slug)))
+    finally:
+        await client.close()
+
+
+@mcp.resource(
+    "workspace://index",
+    name="workspace_index_resource",
+    description="Every workspace on the hub (slug, name, created_at, secured) so clients can discover slugs to audit.",
+    mime_type="application/json",
+)
+async def index_resource() -> str:
+    client = APIClient()
+    try:
+        return _fmt(await client.list_workspaces())
     finally:
         await client.close()
 

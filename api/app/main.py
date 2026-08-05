@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import context, context_misc
+from app.api.routes import auth, context, context_misc
 from app.core.settings import settings
 from app.db.session import init_db
 
@@ -32,6 +32,8 @@ app.add_middleware(
 app.include_router(context.router, prefix="/api", tags=["context"])
 # /search & /summary live in context_misc, scoped behind Permission.read.
 app.include_router(context_misc.router, prefix="/api", tags=["context_misc"])
+# Social login (OAuth) endpoints — open; they mint the same JWT as /token.
+app.include_router(auth.router, prefix="/api", tags=["auth"])
 
 
 @app.get("/health", tags=["meta"])

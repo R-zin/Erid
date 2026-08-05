@@ -99,6 +99,71 @@ cd web && npm install && npm run dev    # http://localhost:5173
 The API creates its tables on startup (a dev convenience; Alembic is the
 roadmap's intended migration tool).
 
+## Deploy (self-host)
+
+The `docker-compose.yml` stack is healthchecked and start-ordered:
+`postgres`/`redis` expose `pg_isready`/`redis-cli ping` healthchecks, and
+`api` (which waits on both with `service_healthy`) probes its own `/health`
+endpoint using Python baked into its slim image (no `curl` dependency). The
+`web` service waits for `api` to be healthy before starting. Bring the whole
+web stack up with:
+
+```bash
+docker compose up -d postgres redis api web
+```
+
+### Configuration (.env)
+
+Copy `.env.example` to `.env` and fill it in — Compose reads it automatically.
+It documents the MCP-worker vars (`WORKSPACE_SLUG`, `WORKSPACE_API_KEY`,
+`WORKSPACE_TOKEN`), the session secret (`ERID_SESSION_SECRET`), the OAuth
+credentials, and `ERID_JWT_PRIVATE_KEY`/`ERID_JWT_PUBLIC_KEY`. Set a stable
+Ed25519 JWT keypair so access tokens survive restarts (an ephemeral pair is
+generated otherwise); `.env.example` shows the `openssl` commands.
+
+### One-shot deploy
+
+`infra/deploy.sh` runs the deploy on a host: it does `git pull --ff-only`,
+rebuilds the `api`/`web` images, restarts the stack, and polls
+`http://localhost:8000/health` until the API is up:
+
+```bash
+./infra/deploy.sh
+```
+
+### CI verification
+
+The `compose-verify` job in `.github/workflows/tests.yml` builds the full
+compose stack on `ubuntu-latest`, starts it, waits for `/health`, and runs a
+REST round-trip smoke (provision a workspace, then assert it shows up in
+`GET /api/workspaces`) before tearing down with `docker compose down -v`.
+
+### OAuth provider setup
+
+To enable social login, register an OAuth app with each provider and put the
+client ID/secret in `.env`. The callback URLs are derived from
+`ERID_OAUTH_REDIRECT_BASE`:
+
+- **Google** — Google Cloud Console → APIs & Services → Credentials → Create
+  OAuth 2.0 Client ID (Web). Authorized redirect URI:
+  `{ERID_OAUTH_REDIRECT_BASE}/api/auth/google/callback`
+- **GitHub** — Settings → Developer settings → OAuth Apps → New OAuth App.
+  Authorization callback URL:
+  `{ERID_OAUTH_REDIRECT_BASE}/api/auth/github/callback`
+
+Set `ERID_OAUTH_WEB_BASE` to where the dashboard is served (default
+`http://localhost:8080`) so users land back in the UI after login.
+
+### MCP worker (optional)
+
+The `mcp-server` service is a stdio MCP worker (one per editor/agent), not part
+of the default web stack — it is gated behind the `mcp` profile. Start it
+explicitly:
+
+```bash
+docker compose --profile mcp up -d
+```
+
 ## Using it from an AI tool
 
 Point your tool's MCP config at the server. `clients/` has ready examples for
@@ -299,5 +364,9 @@ Done (this iteration):
 - [x] Dashboard auth flow (per-workspace key/token, persisted) + workspace switcher + quick task-create form
 - [x] Test sweep: WS-auth happy/negative, non-decision event payloads, edge cases, MCP client error paths (90 tests)
 - [x] Codex CLI config (`clients/codex.toml`); empty `mcp-server/src/tools/` stubs removed
+- [x] OAuth providers (Google + GitHub social login, `ERID_OAUTH_*`/`ERID_SESSION_SECRET` plumbing)
+- [x] Multi-instance MCP resources
+- [x] Dashboard decision-create UI
+- [x] Deploy/CI verification of the compose stack (healthchecked `docker-compose.yml`, `infra/deploy.sh`, `compose-verify` job)
 
-All roadmap items complete. Future ideas (not scoped): OAuth providers, multi-instance MCP resources, dashboard decision-create UI, deploy/CI verification of the compose stack.
+All roadmap items complete.

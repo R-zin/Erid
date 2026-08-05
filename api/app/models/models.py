@@ -93,6 +93,29 @@ class Actor(Base):
     grants: Mapped[list[Grant]] = relationship(back_populates="actor", cascade="all, delete-orphan", lazy="selectin")
 
 
+class OAuthIdentity(Base):
+    """Links an external OAuth account (Google/GitHub) to a workspace ``Actor``.
+
+    OAuth is only an alternate way to mint the internal JWT: a successful
+    social login resolves to a real ``Actor`` row (role ``writer``, no API key)
+    and signs a token for it. ``provider`` + ``provider_subject`` is unique, so
+    a given external account always maps to the same actor across logins.
+    """
+
+    __tablename__ = "oauth_identities"
+    __table_args__ = (UniqueConstraint("provider", "provider_subject", name="uq_oauth_provider_subject"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    provider: Mapped[str] = mapped_column(String(32))  # "google" | "github"
+    provider_subject: Mapped[str] = mapped_column(String(255))  # stable account id from the provider
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    actor: Mapped[Actor] = relationship()
+
+
 class Grant(Base):
     """A single permission granted to an actor (fine-grained, per-resource)."""
 

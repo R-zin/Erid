@@ -48,6 +48,25 @@ class Settings:
     jwt_public_key: str = field(default_factory=lambda: os.getenv("ERID_JWT_PUBLIC_KEY", ""))
     # Access-token lifetime in seconds (default 12h).
     jwt_ttl_seconds: int = field(default_factory=lambda: int(os.getenv("ERID_JWT_TTL_SECONDS", "43200")))
+    # Secret for signing the OAuth ``state`` round-trip (itsdangerous). When
+    # empty, OAuth social login is disabled (login/callback return 503).
+    session_secret: str = field(default_factory=lambda: os.getenv("ERID_SESSION_SECRET", ""))
+    # Google OAuth app credentials. Empty client id => provider disabled (503).
+    oauth_google_client_id: str = field(default_factory=lambda: os.getenv("ERID_OAUTH_GOOGLE_CLIENT_ID", ""))
+    oauth_google_client_secret: str = field(default_factory=lambda: os.getenv("ERID_OAUTH_GOOGLE_CLIENT_SECRET", ""))
+    # GitHub OAuth app credentials.
+    oauth_github_client_id: str = field(default_factory=lambda: os.getenv("ERID_OAUTH_GITHUB_CLIENT_ID", ""))
+    oauth_github_client_secret: str = field(default_factory=lambda: os.getenv("ERID_OAUTH_GITHUB_CLIENT_SECRET", ""))
+    # Public base URL of THIS API, used to build the provider ``redirect_uri``.
+    # Must match the callback URL registered in the provider console.
+    oauth_redirect_base: str = field(
+        default_factory=lambda: os.getenv("ERID_OAUTH_REDIRECT_BASE", "http://localhost:8000").rstrip("/")
+    )
+    # Public base URL of the dashboard SPA; the callback redirects here with the
+    # minted JWT in the URL fragment. In compose the web service is on :8080.
+    oauth_web_base: str = field(
+        default_factory=lambda: os.getenv("ERID_OAUTH_WEB_BASE", "http://localhost:8080").rstrip("/")
+    )
     # Origins allowed to call the API cross-origin (the dashboard). Comma-
     # separated in CORS_ORIGINS. Never "*" — credentials are disallowed, so a
     # wildcard would conflict; enumerate the dashboard origins explicitly.

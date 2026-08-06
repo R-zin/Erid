@@ -106,3 +106,32 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  compose-verify:
+    name: compose-verify (full stack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the compose images
+        run: docker compose build
+      - name: Start the stack
+        run: docker compose up -d postgres redis api web
+      - name: Wait for the API to become healthy
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8000/health && exit 0 || sleep 2
+          done
+          echo "API did not become healthy" >&2
+          docker compose logs --tail 100 api
+          exit 1
+      - name: REST round-trip smoke
+        run: |
+          set -e
+          SLUG="e2e-compose-$GITHUB_RUN_ID"
+          curl -sf -XPOST "http://localhost:8000/api/workspaces?slug=$SLUG"
+          curl -sf http://localhost:8000/api/workspaces \
+            | python3 -c "import sys,json; slugs=[w['slug'] for w in json.load(sys.stdin)]; assert '$SLUG' in slugs, f'workspace not listed: {slugs}'"
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

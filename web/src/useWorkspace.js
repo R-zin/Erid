@@ -65,7 +65,7 @@ export function useWorkspace(slug, credential, authType) {
     }
   }, [slug, credential, authType, load])
 
-  return { summary, tasks, decisions, presence, connected, error, reload: load, setTasks }
+  return { summary, tasks, decisions, presence, connected, error, reload: load, setTasks, setDecisions }
 }
 
 function authMessage(e) {

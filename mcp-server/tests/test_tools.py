@@ -120,3 +120,20 @@ async def _round_trip(base: str, key: str) -> None:
 async def test_full_tool_round_trip(api_base):
     base, key = api_base
     await _round_trip(base, key)
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_index(api_base):
+    """A workspace provisioned over the API shows up in the cross-workspace index."""
+    base, key = api_base
+    client = APIClient(base_url=base, api_key=key)
+    slug = f"mcp-test-{uuid.uuid4().hex[:8]}"
+
+    # Provision the workspace (first write materializes it on the hub).
+    await client.create_task(slug, "index probe", created_by="pytest")
+
+    workspaces = await client.list_workspaces()
+    assert isinstance(workspaces, list)
+    assert any(w["slug"] == slug for w in workspaces)
+
+    await client.close()

@@ -7,8 +7,8 @@ filter-by-actor lookups. Portable across Postgres and SQLite — no dialect gate
 
 The upgrade first deduplicates any pre-existing presence rows per
 ``(workspace_id, actor_name)`` (a running deployment may have accumulated
-duplicates from the old read-then-insert race) so the constraint can be created
-cleanly.
+duplicates from the old read-then-insert race), keeping the freshest row by
+``last_seen``, so the constraint can be created cleanly.
 
 Revision ID: 2c3bc1c08eea
 Revises: b8c9d0e1f2a3
@@ -30,14 +30,17 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # Keep the freshest row per (workspace, actor), dropping older duplicates.
-    # Format-safe on both Postgres and SQLite (id is a UUID stored as text).
+    # Keep only the freshest row per (workspace, actor); drop older duplicates.
+    # Correlated subquery on last_seen is valid on both Postgres and SQLite.
     op.execute(
-        sa.text("DELETE FROM presence WHERE id NOT IN (SELECT MAX(id) FROM presence GROUP BY workspace_id, actor_name)")
+        sa.text(
+            "DELETE FROM presence WHERE (workspace_id, actor_name, last_seen) NOT IN "
+            "(SELECT workspace_id, actor_name, MAX(last_seen) FROM presence "
+            "GROUP BY workspace_id, actor_name)"
+        )
     )
     # SQLite cannot ALTER a table to add a constraint, so use batch mode
-    # (copy-and-move) for the presence unique constraint; on Postgres the batch
-    # context is a thin wrapper around a plain ALTER TABLE.
+    # (copy-and-move); on Postgres batch mode is a thin wrapper over ALTER TABLE.
     with op.batch_alter_table("presence") as batch_op:
         batch_op.create_unique_constraint("uq_presence_workspace_actor", ["workspace_id", "actor_name"])
     op.create_index(op.f("ix_decisions_made_by"), "decisions", ["made_by"], unique=False)

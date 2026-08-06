@@ -8,3 +8,6 @@ httpx>=0.28.0
 python-dotenv>=1.0.0
 greenlet>=3.5.4
 redis>=8.0.1
+pyjwt>=2.9.0
+cryptography>=42.0.0
+itsdangerous>=2.2.0

@@ -44,6 +44,7 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
     decisions: () => get('/decisions'),
     presence: () => get('/presence'),
     createTask: (task) => post('/tasks', task),
+    createDecision: (decision) => post('/decisions', decision),
 
     socketUrl() {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'

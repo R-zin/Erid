@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import { useWorkspace } from './useWorkspace.js'
 import { useWorkspaces } from './useWorkspaces.js'
 import { makeClient } from './api.js'
@@ -6,6 +6,7 @@ import Presence from './components/Presence.jsx'
 import TaskList from './components/TaskList.jsx'
 import DecisionList from './components/DecisionList.jsx'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher.jsx'
+import OAuthLogin from './components/OAuthLogin.jsx'
 
 export default function App() {
   const {
@@ -17,11 +18,28 @@ export default function App() {
     selectWorkspace,
   } = useWorkspaces()
 
+  // OAuth callback capture: after social login the API redirects back to
+  // `#/oauth/callback?token=…&slug=…&name=…`. Persist the minted JWT as the
+  // workspace's `token` credential (the same slot the dashboard already uses)
+  // and strip the fragment so the token doesn't linger in the address bar.
+  useEffect(() => {
+    const hash = window.location.hash
+    if (!hash.startsWith('#/oauth/callback')) return
+    const params = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
+    const token = params.get('token')
+    const slugParam = params.get('slug')
+    if (token && slugParam) {
+      upsertWorkspace({ slug: slugParam, credential: token, authType: 'token' })
+    }
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const credential = active?.credential || ''
   const authType = active?.authType || 'key'
   const slug = active?.slug || ''
 
-  const { summary, tasks, decisions, presence, connected, error, setTasks } =
+  const { summary, tasks, decisions, presence, connected, error, setTasks, setDecisions } =
     useWorkspace(slug, credential, authType)
 
   // A client bound to the active workspace for mutations (task create). Null
@@ -55,6 +73,7 @@ export default function App() {
         <div className="error">
           No workspace selected. Add one with <strong>+ New</strong> above (slug + optional
           API key or token) to get started.
+          <OAuthLogin slug={activeSlug || 'default'} />
         </div>
       )}
 
@@ -82,7 +101,13 @@ export default function App() {
       <main className="grid">
         <Presence presence={presence} />
         <TaskList tasks={tasks} client={client} canWrite={!!credential} onMutate={setTasks} />
-        <DecisionList decisions={decisions} />
+        <DecisionList
+          decisions={decisions}
+          client={client}
+          canWrite={!!credential}
+          tasks={tasks}
+          onMutate={setDecisions}
+        />
       </main>
     </div>
   )

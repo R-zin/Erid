@@ -1,0 +1,16 @@
+{
+  "name": "erid",
+  "owner": {
+    "name": "R-zin"
+  },
+  "metadata": {
+    "description": "AI Context Hub plugins: shared real-time workspace context (tasks, decisions, presence) across AI coding tools."
+  },
+  "plugins": [
+    {
+      "name": "context-hub",
+      "source": "./editors/claude-code",
+      "description": "Shared real-time workspace context (tasks, decisions, presence) for Claude Code: bundles the AI Context Hub MCP server and /hub:* slash commands."
+    }
+  ]
+}

@@ -57,6 +57,7 @@ real-time feed, so:
 | `mcp-server/`| MCP server exposing the state as tools to AI clients (stdio or HTTP). |
 | `mcp-server/src/bridge.py` | stdio JSON-RPC bridge editor plugins spawn (owns all hub I/O). |
 | `editors/vscode/` | VS Code/Cursor extension: live sidebar, quick actions, auto-presence, MCP setup. |
+| `editors/claude-code/` | Claude Code plugin: bundles the MCP server + `/hub:*` slash commands. |
 | `clients/`   | Ready-made MCP configs for Claude Code, Cursor, Codex CLI.            |
 | `web/`       | React dashboard: live presence, open tasks, recent decisions over WS. |
 | `tests/`     | Integration tests for the API routes + WebSocket (pytest + httpx).    |
@@ -226,8 +227,13 @@ connection and reuses the same `APIClient` as the MCP server. Install it:
 
 ```bash
 cd editors/vscode && npm install && npm run compile && npx vsce package
-# then "Extensions: Install from VSIX…" the produced .vsix
+# produces editors/vscode/ai-context-hub-<version>.vsix
 ```
+
+Install it in either editor via **"Extensions: Install from VSIX…"**. The same `.vsix` works in
+Cursor (a VS Code fork). In Cursor, the **MCP config still goes to `.cursor/mcp.json`** (top-level
+`mcpServers`) rather than `.vscode/mcp.json` — the `AI Context Hub: Set Up MCP Config` command
+offers to write that Cursor file too.
 
 Settings: `contextHub.apiBase` (default `http://localhost:8000`),
 `contextHub.workspaceSlug`, `contextHub.actorName`, `contextHub.autoPresence`,
@@ -235,6 +241,31 @@ Settings: `contextHub.apiBase` (default `http://localhost:8000`),
 the editor's SecretStorage (set via `AI Context Hub: Connect`), never in
 `settings.json` or written into `mcp.json`. The same bridge protocol is designed
 to back a future JetBrains plugin.
+
+## Claude Code plugin
+
+`editors/claude-code/` is the Claude Code counterpart: a terminal can't show the
+sidebar, so the surface is the **MCP server + `/hub:*` slash commands**. The plugin
+bundles the same `mcp-server/` in `.mcp.json` (launching `mcp-server/src/server.py`
+via `${CLAUDE_PROJECT_DIR}`) plus commands that drive it — `/hub:summary`,
+`/hub:tasks`, `/hub:task-create`, `/hub:decision-record`, `/hub:search`,
+`/hub:catch-up`, and more. It reads the same env vars (`API_BASE`, `WORKSPACE_SLUG`,
+`WORKSPACE_API_KEY`, `WORKSPACE_TOKEN`) from your shell.
+
+```bash
+# from a Claude Code session started at the repo root
+/plugin install ./editors/claude-code
+# or via the repo marketplace (./.claude-plugin/marketplace.json):
+/plugin marketplace add .
+/plugin install context-hub@erid
+```
+
+It's **in-repo / project-scoped**: the MCP config references this repo's `mcp-server/`,
+so it works from any clone but isn't a portable bundle. See
+[`editors/claude-code/README.md`](editors/claude-code/README.md).
+
+**Codex CLI** has no plugin UI — it's MCP-config only (`clients/codex.toml`, see
+[clients/README.md](clients/README.md#codex-cli)).
 
 ## Authentication
 

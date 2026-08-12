@@ -1,0 +1,8 @@
+{
+  "name": "context-hub",
+  "description": "AI Context Hub: shared real-time workspace context (tasks, decisions, presence) for Claude Code. Bundles the hub MCP server and /hub:* slash commands so sessions read from and write to the same project state as Cursor, Codex, and the dashboard.",
+  "version": "0.1.0",
+  "author": {
+    "name": "R-zin"
+  }
+}

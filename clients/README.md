@@ -42,6 +42,19 @@ claude mcp add context-hub \
 
 Or merge `clients/claude_code.json` into your settings.
 
+**In-repo plugin (alternative).** Instead of the global server above, you can install the
+bundled plugin from [`editors/claude-code/`](../editors/claude-code) — it registers this same
+MCP server *and* adds `/hub:*` slash commands (`/hub:summary`, `/hub:catch-up`, …). It's
+project-scoped to this repo:
+
+```bash
+# from a Claude Code session started at the repo root
+/plugin install ./editors/claude-code      # or: /plugin marketplace add . && /plugin install context-hub@erid
+```
+
+Use one or the other (the global server for every project, the plugin for command shortcuts in
+this repo).
+
 ## Cursor
 
 In Cursor MCP settings, add the command from `clients/cursor.yaml`:
@@ -81,9 +94,24 @@ values blank for you to fill in).
 
 ## Codex CLI
 
-Merge `clients/codex.toml` into your Codex config (`~/.codex/config.toml`). It
-points the stdio command at `mcp-server/src/server.py` with the same env vars
-as above.
+Codex CLI has no plugin/extension UI — its only integration surface is MCP
+config, so this is the whole "extension" for Codex. Merge `clients/codex.toml`
+into your Codex config (`~/.codex/config.toml`). It points the stdio command at
+`mcp-server/src/server.py` with the same env vars as above.
+
+```toml
+[mcp_servers.context-hub]
+command = "uv"
+args = ["run", "python", "mcp-server/src/server.py", "--transport", "stdio"]
+
+[mcp_servers.context-hub.env]
+API_BASE = "http://localhost:8000"
+WORKSPACE_SLUG = "your-workspace"
+WORKSPACE_API_KEY = ""
+WORKSPACE_TOKEN = ""
+```
+
+Run Codex from the repo root so the relative `mcp-server/src/server.py` path resolves.
 
 Once connected, the tools `workspace_summary`, `search_context`,
 `current_tasks`, `create_task`, `update_task`, `create_decision`,

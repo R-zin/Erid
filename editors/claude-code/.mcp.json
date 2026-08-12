@@ -1,0 +1,20 @@
+{
+  "context-hub": {
+    "command": "uv",
+    "args": [
+      "run",
+      "--project",
+      "${CLAUDE_PROJECT_DIR}",
+      "python",
+      "${CLAUDE_PROJECT_DIR}/mcp-server/src/server.py",
+      "--transport",
+      "stdio"
+    ],
+    "env": {
+      "API_BASE": "${API_BASE:-http://localhost:8000}",
+      "WORKSPACE_SLUG": "${WORKSPACE_SLUG}",
+      "WORKSPACE_API_KEY": "${WORKSPACE_API_KEY}",
+      "WORKSPACE_TOKEN": "${WORKSPACE_TOKEN}"
+    }
+  }
+}

@@ -35,8 +35,8 @@ run() {
   [[ $DRY_RUN -eq 1 ]] || "$@"
 }
 
-if want ruff-format; then run uv run ruff format --check api mcp-server tests; fi
-if want ruff-check;  then run uv run ruff check api mcp-server tests; fi
+if want ruff-format; then run uv run ruff format --check api mcp-server tests .github/scripts; fi
+if want ruff-check;  then run uv run ruff check api mcp-server tests .github/scripts; fi
 if want pytest;      then run uv run pytest -v --tb=short; fi
 if want web; then
   if [[ $DRY_RUN -eq 1 ]]; then

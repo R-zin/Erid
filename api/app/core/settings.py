@@ -29,6 +29,14 @@ def _cors_origins_default() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    """Read a boolean env var; "", "0", "false", "no", "off" are false."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", _database_url_default()))
@@ -38,6 +46,18 @@ class Settings:
     event_bus_backend: str = field(default_factory=lambda: os.getenv("EVENT_BUS_BACKEND", "redis"))
     # Header clients use to authenticate against a workspace.
     api_key_header: str = "X-API-Key"
+    # Whether "open" workspaces (no key at all) are permitted. ON by default,
+    # which is what makes the zero-config quick-start work: an unknown slug is
+    # created on first touch and grants full access without credentials.
+    #
+    # Set ERID_ALLOW_OPEN_WORKSPACES=0 on any deployment reachable by people you
+    # don't trust. Closed mode changes three things: an unknown slug 404s instead
+    # of being created (so an anonymous caller can neither fill the workspaces
+    # table nor squat a slug), an existing keyless workspace grants nothing
+    # anonymously, and POST /workspaces/{slug}/secure stops handing its key to
+    # whoever asks first — provision with POST /api/workspaces instead, which
+    # mints a key up front.
+    allow_open_workspaces: bool = field(default_factory=lambda: _env_flag("ERID_ALLOW_OPEN_WORKSPACES", True))
     # Skip Alembic migrations on startup (create tables directly instead). Used
     # by tests and local SQLite; production should leave this unset.
     skip_migrations: bool = field(default_factory=lambda: os.getenv("ERID_SKIP_MIGRATIONS", "") == "1")

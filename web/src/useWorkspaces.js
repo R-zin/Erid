@@ -1,34 +1,87 @@
 import { useCallback, useEffect, useState } from 'react'
 import { listWorkspaces } from './api.js'
 
-// Workspace-list source decision (#5):
+// Workspace-list source decision:
 //
-// The `GET /api/workspaces` discovery endpoint is being built concurrently and
-// is not guaranteed to exist, so the dashboard does NOT depend on it. The
-// source of truth is a USER-MANAGED list persisted in localStorage: each entry
-// is `{ slug, credential, authType }` (`authType` is 'key' | 'token'). The user
-// adds/removes workspaces by slug; credentials are remembered per slug so
-// switching is instant. On mount we ALSO attempt a fault-tolerant fetch of
-// `/api/workspaces` and merge any returned slugs into the picker (credential
-// blank). Every fetch failure is swallowed — discovery is purely additive and
-// never blocks or breaks the local list.
+// The source of truth is a USER-MANAGED list: the user adds/removes workspaces
+// by slug, and each one's credential is remembered so switching is instant. On
+// mount we ALSO make a fault-tolerant fetch of `GET /api/workspaces` and merge
+// any returned slugs into the picker (credential blank). Every fetch failure is
+// swallowed — discovery is purely additive and never blocks the local list.
+//
+// Storage is split deliberately:
+//
+//   localStorage   the workspace list — `{ slug, authType }` only, plus the
+//                  active slug. Non-secret, so it survives restarts and the
+//                  picker stays stable.
+//   sessionStorage the credentials — `{ [slug]: credential }`, scoped to this
+//                  tab session and gone when the tab closes.
+//
+// Credentials are workspace API keys and bearer JWTs; anything in localStorage
+// persists indefinitely and is readable by any script on the origin, so a
+// single XSS would exfiltrate every credential the user had ever entered.
+// Tab-scoped storage is the strongest the browser offers here — there is no web
+// equivalent of the VS Code extension's SecretStorage
+// (editors/vscode/src/extension.ts) short of moving to an httpOnly session
+// cookie. The cost is re-entering credentials in a new tab.
 
-const LS_KEY = 'ch_workspaces'
+const LS_KEY = 'ch_workspaces' // [{ slug, authType }] — never credentials
 const LS_ACTIVE = 'ch_active_slug'
+const SS_CREDS = 'ch_credentials' // { [slug]: credential } — tab session only
 
-function readList() {
+function readCredentials() {
   try {
-    const raw = localStorage.getItem(LS_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((w) => w && w.slug) : []
+    const parsed = JSON.parse(sessionStorage.getItem(SS_CREDS) || 'null')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
   } catch {
-    return []
+    return {}
   }
 }
 
+function writeCredentials(map) {
+  try {
+    sessionStorage.setItem(SS_CREDS, JSON.stringify(map))
+  } catch {
+    // Storage disabled (private mode / quota). The session simply stays
+    // unauthenticated rather than the dashboard failing to render.
+  }
+}
+
+function readList() {
+  let entries = []
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LS_KEY) || 'null')
+    entries = Array.isArray(parsed) ? parsed.filter((w) => w && w.slug) : []
+  } catch {
+    return []
+  }
+  // One-time migration: earlier builds persisted `credential` in localStorage.
+  // Move any found into sessionStorage and rewrite the list without them, so an
+  // upgrade doesn't silently leave old secrets behind on disk.
+  const stale = entries.filter((w) => w.credential)
+  if (stale.length > 0) {
+    const creds = readCredentials()
+    for (const w of stale) creds[w.slug] = w.credential
+    writeCredentials(creds)
+    entries = entries.map(({ slug, authType }) => ({ slug, authType: authType || 'key' }))
+    writeList(entries)
+  }
+  const creds = readCredentials()
+  return entries.map(({ slug, authType }) => ({
+    slug,
+    authType: authType || 'key',
+    credential: creds[slug] || '',
+  }))
+}
+
+// Persists the list (slug + authType) and the credentials to their separate
+// stores. Always call this rather than touching either store directly.
 function writeList(list) {
-  localStorage.setItem(LS_KEY, JSON.stringify(list))
+  localStorage.setItem(
+    LS_KEY,
+    JSON.stringify(list.map(({ slug, authType }) => ({ slug, authType: authType || 'key' }))),
+  )
+  writeCredentials(Object.fromEntries(list.filter((w) => w.credential).map((w) => [w.slug, w.credential])))
 }
 
 // Migrate pre-auth single-workspace storage (ch_slug/ch_key) into the list.
@@ -36,6 +89,10 @@ function seedFromLegacy() {
   const slug = localStorage.getItem('ch_slug')
   if (!slug) return []
   const credential = localStorage.getItem('ch_key') || ''
+  if (credential) {
+    writeCredentials({ ...readCredentials(), [slug]: credential })
+    localStorage.removeItem('ch_key') // never leave a secret in localStorage
+  }
   return [{ slug, credential, authType: 'key' }]
 }
 

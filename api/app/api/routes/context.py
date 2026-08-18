@@ -147,12 +147,24 @@ async def secure_workspace(slug: str, db: AsyncSession = Depends(get_db)) -> Wor
     provisioning model (``POST /workspaces`` is likewise open). The first caller
     becomes the de-facto owner by taking the disclosed key. If the workspace is
     already secured its key is never re-disclosed (use ``rotate-key`` instead).
+
+    Claiming is refused outright when ``allow_open_workspaces`` is off: on a
+    deployment that has declared it has no open workspaces, handing an owner key
+    to an unauthenticated caller is exactly the thing being prevented.
     """
     workspace = await get_workspace_by_slug(db, slug)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"workspace '{slug}' not found")
     if workspace.api_key:
         return WorkspaceSecured(slug=workspace.slug, secured=True, api_key=None)
+    if not settings.allow_open_workspaces:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "open workspaces are disabled (ERID_ALLOW_OPEN_WORKSPACES=0), so an unauthenticated "
+                "caller cannot claim one; provision with POST /api/workspaces?slug= instead"
+            ),
+        )
     workspace.api_key = generate_api_key()
     await db.commit()
     return WorkspaceSecured(slug=workspace.slug, secured=True, api_key=workspace.api_key)

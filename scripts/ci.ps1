@@ -28,8 +28,8 @@ function Invoke-Step([string]$cmd) {
   if (-not $DryRun) { Invoke-Expression $cmd }
 }
 
-if (Want 'ruff-format') { Invoke-Step 'uv run ruff format --check api mcp-server tests' }
-if (Want 'ruff-check')  { Invoke-Step 'uv run ruff check api mcp-server tests' }
+if (Want 'ruff-format') { Invoke-Step 'uv run ruff format --check api mcp-server tests .github/scripts' }
+if (Want 'ruff-check')  { Invoke-Step 'uv run ruff check api mcp-server tests .github/scripts' }
 if (Want 'pytest')      { Invoke-Step 'uv run pytest -v --tb=short' }
 if (Want 'web') {
   if ($DryRun) {

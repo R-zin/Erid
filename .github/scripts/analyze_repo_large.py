@@ -195,7 +195,7 @@ def _git(root: str, *args: str) -> str | None:
             text=True,
             timeout=30,
         )
-    except OSError, subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None

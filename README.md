@@ -113,6 +113,11 @@ web stack up with:
 docker compose up -d postgres redis api web
 ```
 
+Only `api` (`:8000`) and `web` (`:8080`) publish on all interfaces. Postgres and
+Redis are bound to `127.0.0.1` — both run with default/no credentials, so they
+must stay off-box; the `api` container reaches them over the compose network
+regardless. Host tools (`psql`, `redis-cli`) still work from the machine itself.
+
 ### Configuration (.env)
 
 Copy `.env.example` to `.env` and fill it in — Compose reads it automatically.
@@ -280,6 +285,25 @@ credential shapes are accepted:
 - **JWT (Ed25519)** — exchange a key for a short-lived bearer token at the login
   endpoint; send as `Authorization: Bearer <jwt>`.
 
+### Closing off open workspaces (public deployments)
+
+"Open" is a real convenience and a real exposure. With it on (the default), the
+first request naming any slug **creates** that workspace, keyless, with full
+access — and `POST /workspaces/{slug}/secure` then hands its owner key to whoever
+asks first. On a private box that's the zero-config flow. On anything strangers
+can reach it lets them grow the `workspaces` table at will and squat slugs your
+team hasn't provisioned yet.
+
+Set **`ERID_ALLOW_OPEN_WORKSPACES=0`** to turn all of that off:
+
+- an unknown slug returns **404** instead of being created;
+- an existing keyless workspace grants **nothing** anonymously;
+- `POST /{slug}/secure` returns **403** — provision with
+  `POST /api/workspaces?slug=` instead, which mints a key up front.
+
+Already have keyless workspaces from before? Claim their keys via `/secure`
+while the flag is still on, then flip it off.
+
 **Roles:** `reader` (read-only) → `writer` (read + write tasks/decisions/
 presence) → `owner` (writer + mint/revoke keys, manage actors). Grants give
 per-resource control: `read`, `write_tasks`, `write_decisions`, `presence`,
@@ -305,6 +329,13 @@ on the WebSocket (browsers can't set WS headers). JWT Ed25519 keys come from
 `ERID_JWT_PRIVATE_KEY`/`ERID_JWT_PUBLIC_KEY` (PEM); an ephemeral pair is
 generated if unset (tokens then die on restart — set them in production).
 
+**Where credentials live.** The dashboard keeps its workspace list (slug +
+credential type) in `localStorage`, but the credentials themselves in
+`sessionStorage` — so they're scoped to the tab and gone when it closes, rather
+than sitting on disk indefinitely where one XSS would harvest all of them. You
+re-enter a credential in a new tab. The VS Code extension has a real keystore and
+uses it (`vscode.SecretStorage`, set via **AI Context Hub: Connect**).
+
 ## REST API
 
 Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
@@ -312,14 +343,20 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | Method | Path                          | Auth | Purpose                          |
 | ------ | ----------------------------- | ---- | -------------------------------- |
 | GET    | `/health`                     | —    | liveness                         |
+| GET    | `/workspaces`                 | —    | directory (slug/name/secured; never keys) |
 | POST   | `/workspaces?slug=`           | —    | provision + mint API key         |
+| POST   | `/workspaces/{slug}/secure`   | —†   | claim an open workspace (key shown once) |
+| POST   | `/workspaces/{slug}/rotate-key`| owner | rotate the workspace key        |
+| DELETE | `/workspaces/{slug}`          | owner| delete the workspace (cascades)  |
 | GET    | `/workspaces/{slug}/summary`  | key* | counts + active developers       |
 | GET    | `/workspaces/{slug}/search?q=`| key* | search decisions + tasks         |
 | GET    | `/workspaces/{slug}/tasks`    | key* | list (filter `?status=`)         |
 | POST   | `/workspaces/{slug}/tasks`    | key* | create                           |
 | PUT    | `/workspaces/{slug}/tasks/{id}`| key*| update status/title/assignee     |
+| DELETE | `/workspaces/{slug}/tasks/{id}`| key*| delete a task                   |
 | GET    | `/workspaces/{slug}/decisions`| key* | list recent (`?limit=`)          |
 | POST   | `/workspaces/{slug}/decisions`| key* | record a decision                |
+| DELETE | `/workspaces/{slug}/decisions/{id}`| key*| delete a decision           |
 | GET    | `/workspaces/{slug}/presence` | key* | active collaborators             |
 | POST   | `/workspaces/{slug}/presence` | key* | presence heartbeat (upsert)      |
 | POST   | `/workspaces/{slug}/actors`   | admin| mint per-actor key (shown once)  |
@@ -328,7 +365,11 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | POST   | `/workspaces/{slug}/token`    | key* | exchange a key for a JWT         |
 | WS     | `/workspaces/{slug}/ws`       | key* | real-time event stream           |
 
-\* only when the workspace has a key configured; open workspaces skip auth.
+\* only when the workspace has a key configured; open workspaces skip auth —
+unless `ERID_ALLOW_OPEN_WORKSPACES=0`, which makes an unknown slug 404 and a
+keyless workspace inaccessible rather than open.
+† unauthenticated by design (an open workspace has no admin to gate on), and
+disabled entirely when `ERID_ALLOW_OPEN_WORKSPACES=0`.
 `admin` requires the `admin_keys` permission (owner or a granted admin). Each
 route enforces a specific permission (`read`/`write_tasks`/`write_decisions`/
 `presence`); a key/token must carry it.
@@ -365,6 +406,7 @@ Environment variables (see `api/app/core/settings.py`, `mcp-server/src/client.py
 | `REDIS_URL`         | `redis://localhost:6379/0`                         | api       |
 | `EVENT_BUS_BACKEND` | `redis` (falls back to in-process if unreachable)  | api       |
 | `CORS_ORIGINS`      | `http://localhost:5173,http://localhost:8000`      | api       |
+| `ERID_ALLOW_OPEN_WORKSPACES` | `1` — set `0` on public deployments (see [Authentication](#closing-off-open-workspaces-public-deployments)) | api |
 | `API_BASE`          | `http://localhost:8000`                            | mcp-server|
 | `WORKSPACE_SLUG`    | —                                                  | mcp-server|
 | `WORKSPACE_API_KEY` | —                                                  | mcp-server|
@@ -392,7 +434,7 @@ Done (this iteration):
 - [x] Presence atomic upsert (`INSERT … ON CONFLICT`) + `uq_presence_workspace_actor`, `decisions.made_by` / `tasks.assigned_to` indexes
 - [x] DELETE endpoints (`/tasks/{id}` → `write_tasks`, `/decisions/{id}` → `write_decisions`, `/workspaces/{slug}` → owner, cascading)
 - [x] Workspace management (`GET /workspaces` directory, `POST /{slug}/secure` claim, `POST /{slug}/rotate-key`)
-- [x] Dashboard auth flow (per-workspace key/token, persisted) + workspace switcher + quick task-create form
+- [x] Dashboard auth flow (per-workspace key/token) + workspace switcher + quick task-create form
 - [x] Test sweep: WS-auth happy/negative, non-decision event payloads, edge cases, MCP client error paths (90 tests)
 - [x] Codex CLI config (`clients/codex.toml`); empty `mcp-server/src/tools/` stubs removed
 - [x] OAuth providers (Google + GitHub social login, `ERID_OAUTH_*`/`ERID_SESSION_SECRET` plumbing)
@@ -401,3 +443,24 @@ Done (this iteration):
 - [x] Deploy/CI verification of the compose stack (healthchecked `docker-compose.yml`, `infra/deploy.sh`, `compose-verify` job)
 
 All roadmap items complete.
+
+### Known gaps
+
+The list above is what's built, not a claim that nothing is left. Open items:
+
+- **Dashboard is create-only** — tasks and decisions can be created but not
+  completed or deleted from the web UI, though the REST endpoints exist and the
+  VS Code extension exposes all three. `web/src/api.js` needs `put`/`del` helpers.
+- **Dashboard WebSocket doesn't reconnect** — `web/src/useWorkspace.js` sets
+  `connected = false` on close and stops there, so one blip means a reload. It
+  also refetches all four collections on *every* frame (presence heartbeats
+  included) and ignores the `task_deleted` / `decision_deleted` /
+  `workspace_deleted` events the API publishes.
+- **No MCP delete tools** — `mcp-server/src/client.py` implements `delete_task` /
+  `delete_decision`, but `server.py` registers neither, and nothing for
+  secure / rotate-key / actor management. Each tool also builds and closes its own
+  `httpx.AsyncClient` per call instead of sharing one.
+- **No JS/TS tests** — CI's `web` job only runs `npm run build`, and the VS Code
+  extension is never compiled or type-checked in CI.
+- **JetBrains plugin** — `mcp-server/src/bridge.py`'s JSON-RPC protocol was built
+  to back one; nothing consumes it yet besides the VS Code extension.

@@ -38,6 +38,27 @@ def _channel(workspace_slug: str) -> str:
     return f"{CHANNEL_PREFIX}{workspace_slug}"
 
 
+def _offer(queue: asyncio.Queue, payload: dict[str, Any]) -> None:
+    """Hand an event to one subscriber, dropping it if that subscriber is behind.
+
+    A subscriber that stops draining its queue (a WebSocket client on a slow or
+    half-open connection) must not be able to break anyone else: an unguarded
+    ``put_nowait`` raises ``QueueFull``, which on the in-process bus aborts
+    delivery to the *remaining* subscribers mid-publish, and on the Redis bus
+    kills that subscription's ``_pump`` task while its socket stays open — so it
+    silently receives nothing from then on. Dropping the event for the one slow
+    subscriber, loudly, is the containable failure.
+    """
+    try:
+        queue.put_nowait(payload)
+    except asyncio.QueueFull:
+        logger.warning(
+            "event bus: subscriber queue full (%s); dropping '%s' event",
+            getattr(queue, "workspace_slug", "unknown workspace"),
+            payload.get("type", "?"),
+        )
+
+
 class InProcessEventBus:
     """Simple fan-out bus confined to the current process."""
 
@@ -53,7 +74,7 @@ class InProcessEventBus:
             # Deliver only to subscribers interested in this workspace (each
             # records the slug it cares about as an attribute on its queue).
             if getattr(queue, "workspace_slug", None) == workspace_slug:
-                queue.put_nowait(payload)
+                _offer(queue, payload)
 
     @contextlib.asynccontextmanager
     async def subscribe(self, workspace_slug: str) -> AsyncIterator[asyncio.Queue]:
@@ -98,6 +119,7 @@ class RedisEventBus:
         pubsub = conn.pubsub()
         await pubsub.subscribe(_channel(workspace_slug))
         queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        queue.workspace_slug = workspace_slug  # type: ignore[attr-defined]  # for _offer's log line
         listener = asyncio.create_task(self._pump(pubsub, queue))
         try:
             yield queue
@@ -115,9 +137,9 @@ class RedisEventBus:
             if message and message.get("type") == "message":
                 try:
                     data = json.loads(message["data"])
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     continue
-                queue.put_nowait(data)
+                _offer(queue, data)
             else:
                 # Yield to the event loop so cancellation is responsive.
                 await asyncio.sleep(0.01)

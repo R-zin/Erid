@@ -11,6 +11,8 @@ it holds the matching :class:`Permission`. Four credential shapes are accepted
 - **JWT bearer** — an Ed25519 token from ``POST /workspaces/{slug}/token``,
   resolved back to its actor.
 - **open** — a workspace with no key at all: read/write fully open (back-compat).
+  Only when ``settings.allow_open_workspaces`` is on (the default); see
+  :func:`_resolve_workspace`.
 
 Authorization is fine-grained: each route declares the action it requires via
 :func:`require_action`.
@@ -33,7 +35,7 @@ from app.core.settings import settings
 from app.core.tokens import verify_token
 from app.db.session import get_db
 from app.models.models import ROLE_GRANTS, Actor, ActorRole, Permission, Workspace
-from app.services.workspace_service import get_or_create_workspace
+from app.services.workspace_service import get_or_create_workspace, get_workspace_by_slug
 
 # auto_error=False so we can return a precise 401/403 ourselves and so WS
 # connections (which can't set headers easily) can pass the key as a query param.
@@ -155,6 +157,23 @@ async def resolve_credentials(
     return None
 
 
+async def _resolve_workspace(db: AsyncSession, slug: str) -> Workspace | None:
+    """Resolve the workspace a request targets, honouring ``allow_open_workspaces``.
+
+    With open workspaces enabled (default), an unknown slug is *created* on first
+    touch and left keyless — that implicit create is what lets the quick-start
+    work with no provisioning step.
+
+    With them disabled, an unknown slug resolves to ``None``. That closes two
+    holes on a public deployment: an anonymous caller can no longer grow the
+    ``workspaces`` table by requesting arbitrary slugs, nor pre-create a slug it
+    then claims via ``POST /workspaces/{slug}/secure`` before the real team does.
+    """
+    if settings.allow_open_workspaces:
+        return await get_or_create_workspace(db, slug)
+    return await get_workspace_by_slug(db, slug)
+
+
 async def resolve_principal(
     slug: str,
     db: AsyncSession,
@@ -165,9 +184,12 @@ async def resolve_principal(
     """Resolve a request to a Principal, handling open workspaces.
 
     Unlike :func:`resolve_credentials`, this never fails for an open workspace
-    (no key configured): it returns an open Principal with full access.
+    (no key configured): it returns an open Principal with full access — unless
+    ``allow_open_workspaces`` is off, in which case nothing is ever open.
     """
-    workspace = await get_or_create_workspace(db, slug)
+    workspace = await _resolve_workspace(db, slug)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"workspace '{slug}' not found")
     key = header_key or query_key
     bearer_token = bearer.credentials if bearer else None
 
@@ -177,6 +199,14 @@ async def resolve_principal(
         principal = await resolve_credentials(db, workspace, key=key, bearer=bearer_token)
         if principal is not None:
             return principal
+        if not settings.allow_open_workspaces:
+            # Closed mode: a keyless workspace (one created before the flag was
+            # set) is locked rather than world-writable. To recover access, claim
+            # its key via POST /{slug}/secure while the flag is still on.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"workspace '{slug}' has no key and open workspaces are disabled",
+            )
         return Principal(
             kind=PrincipalKind.open,
             workspace=workspace,
@@ -205,13 +235,16 @@ async def resolve_ws_principal(
     """Resolve a WebSocket connection (query/header credentials) to a Principal.
 
     Returns an open Principal for keyless workspaces, ``None`` when credentials
-    are required but missing/invalid.
+    are required but missing/invalid — the caller closes the socket with 1008.
+    An unknown slug is also ``None`` when open workspaces are disabled.
     """
-    workspace = await get_or_create_workspace(db, slug)
+    workspace = await _resolve_workspace(db, slug)
+    if workspace is None:
+        return None
     principal = await resolve_credentials(db, workspace, key=key, bearer=token)
     if principal is not None:
         return principal
-    if not workspace.api_key and not (key or token):
+    if settings.allow_open_workspaces and not workspace.api_key and not (key or token):
         return Principal(
             kind=PrincipalKind.open,
             workspace=workspace,

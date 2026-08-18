@@ -83,7 +83,7 @@ def newest_file(root: Path) -> NewestFile | None:
                                 best = NewestFile(relpath=str(Path(entry.path).relative_to(root)), mtime=mtime)
                     except OSError:
                         continue  # file vanished mid-scan
-        except PermissionError, NotADirectoryError:
+        except (PermissionError, NotADirectoryError):
             continue
     return best
 
@@ -99,7 +99,7 @@ def default_actor_name() -> str:
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
-    except OSError, subprocess.SubprocessError:
+    except (OSError, subprocess.SubprocessError):
         pass
     return os.environ.get("USER") or os.environ.get("USERNAME") or "watcher"
 

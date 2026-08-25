@@ -73,6 +73,17 @@ def live_server():
     thread.join(timeout=5)
 
 
+async def test_websocket_heartbeat_frame(live_server, monkeypatch):
+    """An idle client receives the app-level keepalive ping instead of the
+    connection blocking forever on queue.get()."""
+    monkeypatch.setattr("app.api.routes.context.WS_HEARTBEAT_SECS", 0.1)
+    _, ws_base = live_server
+    slug = "ws-heartbeat"
+    async with websockets.connect(f"{ws_base}/api/workspaces/{slug}/ws") as ws:
+        msg = await asyncio.wait_for(ws.recv(), timeout=5)
+        assert json.loads(msg) == {"type": "ping"}
+
+
 async def test_websocket_endpoint_live(live_server):
     base, ws_base = live_server
     slug = "ws-live"

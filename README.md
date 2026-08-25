@@ -444,23 +444,28 @@ Done (this iteration):
 
 All roadmap items complete.
 
-### Known gaps
+### Recently closed gaps
 
-The list above is what's built, not a claim that nothing is left. Open items:
+These were open items tracked here; all are now done:
 
-- **Dashboard is create-only** — tasks and decisions can be created but not
-  completed or deleted from the web UI, though the REST endpoints exist and the
-  VS Code extension exposes all three. `web/src/api.js` needs `put`/`del` helpers.
-- **Dashboard WebSocket doesn't reconnect** — `web/src/useWorkspace.js` sets
-  `connected = false` on close and stops there, so one blip means a reload. It
-  also refetches all four collections on *every* frame (presence heartbeats
-  included) and ignores the `task_deleted` / `decision_deleted` /
-  `workspace_deleted` events the API publishes.
-- **No MCP delete tools** — `mcp-server/src/client.py` implements `delete_task` /
-  `delete_decision`, but `server.py` registers neither, and nothing for
-  secure / rotate-key / actor management. Each tool also builds and closes its own
-  `httpx.AsyncClient` per call instead of sharing one.
-- **No JS/TS tests** — CI's `web` job only runs `npm run build`, and the VS Code
-  extension is never compiled or type-checked in CI.
-- **JetBrains plugin** — `mcp-server/src/bridge.py`'s JSON-RPC protocol was built
-  to back one; nothing consumes it yet besides the VS Code extension.
+- [x] **Dashboard full mutations** — `web/src/api.js` has `put`/`del` (204-tolerant
+  `request`) plus `updateTask`/`deleteTask`/`deleteDecision`; TaskList rows get a
+  status select + delete and DecisionList a delete, all optimistic with rollback.
+- [x] **Dashboard WebSocket resilience** — `web/src/useWorkspace.js` reconnects
+  with exponential backoff (resyncing REST once per reconnect), applies events
+  locally, refreshes only the summary on a trailing debounce (no more 4-collection
+  reload per frame), and handles `task_deleted` / `decision_deleted` /
+  `workspace_deleted` and the server's `ping` keepalive.
+- [x] **MCP delete tools + shared client** — `server.py` registers `delete_task` /
+  `delete_decision` and every tool/resource shares one process-wide `APIClient`
+  (HTTP connection pooling) instead of a new `httpx.AsyncClient` per call.
+  (secure / rotate-key / actor-management tools remain a possible follow-up.)
+- [x] **JS/TS tests in CI** — the `web` job runs vitest (`npm test`) after the
+  build, a `vscode-extension` job type-checks (`tsc --noEmit`) and compiles the
+  extension, and a `jetbrains-plugin` job compiles the plugin.
+- [x] **JetBrains plugin** — `editors/jetbrains/` drives the same
+  `mcp-server/src/bridge.py` JSON-RPC protocol as the VS Code extension (minimal
+  tool-window UI; see its README).
+- [x] **API hardening & perf** — the `/ws` stream sends an app-level `ping`
+  keepalive so dead clients drop instead of blocking forever, the SQLite search
+  fallback escapes LIKE wildcards, and `/summary` aggregates counts in SQL.

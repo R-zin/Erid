@@ -28,6 +28,22 @@ mcp = FastMCP("ai-context-hub")
 
 DEFAULT_SLUG = os.environ.get("WORKSPACE_SLUG", "")
 
+# One process-wide API client, shared by every tool/resource so HTTP connections
+# are pooled instead of being built and torn down per call. The FastMCP server's
+# lifetime is the process lifetime (stdio or streamable-http), so the loop exits
+# with it and no explicit close is needed.
+_client: APIClient | None = None
+
+
+def _get_client() -> APIClient:
+    """Lazily build (once) and return the shared client. Kept as a module-level
+    getter so tests can reset ``_client`` or monkeypatch ``APIClient`` before
+    first use."""
+    global _client
+    if _client is None:
+        _client = APIClient()
+    return _client
+
 
 def _slug(slug: str | None) -> str:
     resolved = slug or DEFAULT_SLUG
@@ -43,32 +59,20 @@ def _fmt(data) -> str:
 @mcp.tool()
 async def workspace_summary(slug: str | None = None) -> str:
     """Get a shared workspace summary: task/decision counts and who's active."""
-    client = APIClient()
-    try:
-        return _fmt(await client.workspace_summary(_slug(slug)))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().workspace_summary(_slug(slug)))
 
 
 @mcp.tool()
 async def search_context(q: str, slug: str | None = None) -> str:
     """Search decisions and tasks in a workspace by free-text query."""
-    client = APIClient()
-    try:
-        return _fmt(await client.search_context(_slug(slug), q))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().search_context(_slug(slug), q))
 
 
 @mcp.tool()
 async def current_tasks(status: str | None = None, slug: str | None = None) -> str:
     """List tasks in the workspace, optionally filtered by status
     (todo, in_progress, done, blocked)."""
-    client = APIClient()
-    try:
-        return _fmt(await client.current_tasks(_slug(slug), status=status))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().current_tasks(_slug(slug), status=status))
 
 
 @mcp.tool()
@@ -76,11 +80,7 @@ async def create_task(
     title: str, assigned_to: str | None = None, created_by: str | None = None, slug: str | None = None
 ) -> str:
     """Create a task in the shared workspace."""
-    client = APIClient()
-    try:
-        return _fmt(await client.create_task(_slug(slug), title, assigned_to=assigned_to, created_by=created_by))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().create_task(_slug(slug), title, assigned_to=assigned_to, created_by=created_by))
 
 
 @mcp.tool()
@@ -92,11 +92,15 @@ async def update_task(
     slug: str | None = None,
 ) -> str:
     """Update a task's status, title, or assignee."""
-    client = APIClient()
-    try:
-        return _fmt(await client.update_task(_slug(slug), task_id, status=status, title=title, assigned_to=assigned_to))
-    finally:
-        await client.close()
+    return _fmt(
+        await _get_client().update_task(_slug(slug), task_id, status=status, title=title, assigned_to=assigned_to)
+    )
+
+
+@mcp.tool()
+async def delete_task(task_id: str, slug: str | None = None) -> str:
+    """Delete a task from the workspace."""
+    return _fmt(await _get_client().delete_task(_slug(slug), task_id))
 
 
 @mcp.tool()
@@ -111,45 +115,35 @@ async def create_decision(
     """Record an architectural/implementation decision so every tool can see it.
 
     Optionally link it to a task by passing that task's id as ``task_id``."""
-    client = APIClient()
-    try:
-        return _fmt(
-            await client.create_decision(
-                _slug(slug), title, reason=reason, related_files=related_files, made_by=made_by, task_id=task_id
-            )
+    return _fmt(
+        await _get_client().create_decision(
+            _slug(slug), title, reason=reason, related_files=related_files, made_by=made_by, task_id=task_id
         )
-    finally:
-        await client.close()
+    )
+
+
+@mcp.tool()
+async def delete_decision(decision_id: str, slug: str | None = None) -> str:
+    """Delete a decision from the workspace."""
+    return _fmt(await _get_client().delete_decision(_slug(slug), decision_id))
 
 
 @mcp.tool()
 async def task_decisions(task_id: str, slug: str | None = None) -> str:
     """List the decisions linked to a task (decision ↔ task linking)."""
-    client = APIClient()
-    try:
-        return _fmt(await client.task_decisions(_slug(slug), task_id))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().task_decisions(_slug(slug), task_id))
 
 
 @mcp.tool()
 async def recent_decisions(limit: int = 20, slug: str | None = None) -> str:
     """List the most recent decisions in the workspace."""
-    client = APIClient()
-    try:
-        return _fmt(await client.recent_decisions(_slug(slug), limit=limit))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().recent_decisions(_slug(slug), limit=limit))
 
 
 @mcp.tool()
 async def active_developers(slug: str | None = None) -> str:
     """List developers/agents currently active in the workspace."""
-    client = APIClient()
-    try:
-        return _fmt(await client.active_developers(_slug(slug)))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().active_developers(_slug(slug)))
 
 
 @mcp.tool()
@@ -161,15 +155,11 @@ async def update_presence(
     slug: str | None = None,
 ) -> str:
     """Report what you're working on so collaborators (human & AI) can see it."""
-    client = APIClient()
-    try:
-        return _fmt(
-            await client.update_presence(
-                _slug(slug), actor_name, actor_type=actor_type, current_file=current_file, current_task=current_task
-            )
+    return _fmt(
+        await _get_client().update_presence(
+            _slug(slug), actor_name, actor_type=actor_type, current_file=current_file, current_task=current_task
         )
-    finally:
-        await client.close()
+    )
 
 
 @mcp.tool()
@@ -178,11 +168,7 @@ async def list_workspaces() -> str:
 
     Use this to discover workspace slugs before auditing more than one.
     Tool-only counterpart of the ``workspace://index`` resource."""
-    client = APIClient()
-    try:
-        return _fmt(await client.list_workspaces())
-    finally:
-        await client.close()
+    return _fmt(await _get_client().list_workspaces())
 
 
 # ---------------------------------------------------------------------------
@@ -197,11 +183,7 @@ async def list_workspaces() -> str:
     mime_type="application/json",
 )
 async def summary_resource(slug: str) -> str:
-    client = APIClient()
-    try:
-        return _fmt(await client.workspace_summary(_slug(slug)))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().workspace_summary(_slug(slug)))
 
 
 @mcp.resource(
@@ -211,11 +193,7 @@ async def summary_resource(slug: str) -> str:
     mime_type="application/json",
 )
 async def tasks_resource(slug: str) -> str:
-    client = APIClient()
-    try:
-        return _fmt(await client.current_tasks(_slug(slug)))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().current_tasks(_slug(slug)))
 
 
 @mcp.resource(
@@ -225,11 +203,7 @@ async def tasks_resource(slug: str) -> str:
     mime_type="application/json",
 )
 async def decisions_resource(slug: str) -> str:
-    client = APIClient()
-    try:
-        return _fmt(await client.recent_decisions(_slug(slug)))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().recent_decisions(_slug(slug)))
 
 
 @mcp.resource(
@@ -239,11 +213,7 @@ async def decisions_resource(slug: str) -> str:
     mime_type="application/json",
 )
 async def presence_resource(slug: str) -> str:
-    client = APIClient()
-    try:
-        return _fmt(await client.active_developers(_slug(slug)))
-    finally:
-        await client.close()
+    return _fmt(await _get_client().active_developers(_slug(slug)))
 
 
 @mcp.resource(
@@ -253,11 +223,7 @@ async def presence_resource(slug: str) -> str:
     mime_type="application/json",
 )
 async def index_resource() -> str:
-    client = APIClient()
-    try:
-        return _fmt(await client.list_workspaces())
-    finally:
-        await client.close()
+    return _fmt(await _get_client().list_workspaces())
 
 
 # ---------------------------------------------------------------------------

@@ -84,7 +84,8 @@ jobs:
           KEY=$(curl -sf -XPOST 'http://127.0.0.1:8000/api/workspaces?slug=ci' | uv run python -c 'import sys,json;print(json.load(sys.stdin)["api_key"])')
           curl -sf -XPOST http://127.0.0.1:8000/api/workspaces/ci/tasks \
             -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"title":"ci smoke"}'
-          curl -sf http://127.0.0.1:8000/api/workspaces/ci/summary
+          curl -sf http://127.0.0.1:8000/api/workspaces/ci/summary \
+            -H "X-API-Key: $KEY"
       - name: Run MCP tool round-trip against the live API
         working-directory: mcp-server
         env:

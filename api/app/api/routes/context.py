@@ -57,6 +57,11 @@ router = APIRouter()
 # A presence record is considered active if seen within this window.
 STALE_AFTER = timedelta(minutes=10)
 
+# Idle keepalive for the /ws stream (app-level; Starlette exposes no server-side
+# ping/control-frame API, so we send a JSON ``{"type": "ping"}`` frame instead).
+# Dead/half-open clients raise on this send instead of blocking the loop forever.
+WS_HEARTBEAT_SECS = 30
+
 
 async def _publish(slug: str, event_type: str, data: dict) -> None:
     bus = await get_event_bus()
@@ -557,7 +562,14 @@ async def workspace_events(websocket: WebSocket, slug: str):
     try:
         async with bus.subscribe(slug) as queue:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=WS_HEARTBEAT_SECS)
+                except TimeoutError:
+                    # Idle connection: probe with an app-level keepalive so a dead
+                    # or half-open client fails the send (and exits) rather than
+                    # sitting on queue.get() forever (resource exhaustion).
+                    await websocket.send_json({"type": "ping"})
+                    continue
                 await websocket.send_json(event)
     except WebSocketDisconnect:
         pass

@@ -1,0 +1,30 @@
+<!-- Minimal AI Context Hub plugin: drives the same Python hub bridge
+     (mcp-server/src/bridge.py, stdio NDJSON JSON-RPC 2.0) as the VS Code
+     extension — see editors/vscode. Kept deliberately small: one tool window
+     (Tasks/Decisions/Presence) + one Connect action. -->
+<idea-plugin>
+    <id>dev.erid.hub</id>
+    <name>AI Context Hub</name>
+    <vendor>ai-context-hub</vendor>
+    <version>0.1.0</version>
+    <description><![CDATA[
+        Shared real-time workspace context (tasks, decisions, presence) for AI
+        coding tools, backed by the AI Context Hub bridge.
+    ]]></description>
+
+        <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="AI Context Hub" anchor="right" canCloseContents="false"
+                    factoryClass="dev.erid.hub.HubToolWindowFactory"/>
+    </extensions>
+
+    <actions>
+        <group id="dev.erid.hub.actions" text="AI Context Hub" popup="true">
+            <action id="dev.erid.hub.ConnectAction" class="dev.erid.hub.ConnectAction"
+                    text="Connect to Workspace…"
+                    description="Prompt for the hub workspace credential and connect the bridge"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </group>
+    </actions>
+</idea-plugin>

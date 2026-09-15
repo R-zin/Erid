@@ -100,6 +100,46 @@ async def test_search_secured_requires_credentials(sec_client):
     assert r.json()["query"] == "x"
 
 
+async def test_search_escapes_like_wildcards(sec_client):
+    """SQLite fallback: user-supplied % and _ are literals, not wildcards."""
+    sec, main = sec_client
+    slug = "sec-ws-wildcards"
+    key = await _provision(main, slug)
+    admin = {"X-API-Key": key}
+    assert (
+        await main.post(f"/api/workspaces/{slug}/tasks", json={"title": "100% done"}, headers=admin)
+    ).status_code == 201
+    assert (
+        await main.post(f"/api/workspaces/{slug}/tasks", json={"title": "1000 done"}, headers=admin)
+    ).status_code == 201
+
+    literal = (await sec.get(f"/api/workspaces/{slug}/search", params={"q": "100%"}, headers=admin)).json()
+    assert [t["title"] for t in literal["tasks"]] == ["100% done"]
+
+    underscore = (await sec.get(f"/api/workspaces/{slug}/search", params={"q": "_"}, headers=admin)).json()
+    assert [t["title"] for t in underscore["tasks"]] == []
+
+
+async def test_summary_counts_open_tasks(sec_client):
+    """Summary counts aggregate correctly once a task is completed."""
+    sec, main = sec_client
+    slug = "sec-ws-counts"
+    key = await _provision(main, slug)
+    admin = {"X-API-Key": key}
+    for title in ("one", "two"):
+        assert (
+            await main.post(f"/api/workspaces/{slug}/tasks", json={"title": title}, headers=admin)
+        ).status_code == 201
+    task_id = (await main.get(f"/api/workspaces/{slug}/tasks", headers=admin)).json()[0]["id"]
+    assert (
+        await main.put(f"/api/workspaces/{slug}/tasks/{task_id}", json={"status": "done"}, headers=admin)
+    ).status_code == 200
+
+    summary = (await sec.get(f"/api/workspaces/{slug}/summary", headers=admin)).json()
+    assert summary["task_count"] == 2
+    assert summary["open_task_count"] == 1
+
+
 async def test_search_and_summary_return_seeded_data(sec_client):
     """Search/summary actually read this workspace's rows (not just auth)."""
     sec, main = sec_client

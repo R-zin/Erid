@@ -53,17 +53,23 @@ async def search_workspace(
             .limit(limit)
         )
     else:
-        like = f"%{q}%"
+        # Escape LIKE wildcards so %, _, and \ in the query match literally;
+        # backslash must be escaped first (escaping % before \ would double-escape).
+        escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         decisions_result = await db.execute(
             select(Decision)
             .where(
                 Decision.workspace_id == workspace.id,
-                or_(Decision.title.ilike(like), Decision.reason.ilike(like)),
+                or_(
+                    Decision.title.ilike(like, escape="\\"),
+                    Decision.reason.ilike(like, escape="\\"),
+                ),
             )
             .limit(limit)
         )
         tasks_result = await db.execute(
-            select(Task).where(Task.workspace_id == workspace.id, Task.title.ilike(like)).limit(limit)
+            select(Task).where(Task.workspace_id == workspace.id, Task.title.ilike(like, escape="\\")).limit(limit)
         )
 
     return {
@@ -79,8 +85,22 @@ async def workspace_summary(
     db: AsyncSession = Depends(get_db),
 ) -> WorkspaceSummary:
     workspace = principal.workspace
-    tasks = (await db.execute(select(Task).where(Task.workspace_id == workspace.id))).scalars().all()
-    decisions = (await db.execute(select(Decision).where(Decision.workspace_id == workspace.id))).scalars().all()
+    # Aggregate in SQL — loading every Task/Decision row just to count it in
+    # Python degrades badly as a workspace grows. Presence stays a row fetch
+    # because the response needs the actor names, not just a count.
+    task_count = (
+        await db.execute(select(func.count()).select_from(Task).where(Task.workspace_id == workspace.id))
+    ).scalar_one()
+    open_task_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(Task.workspace_id == workspace.id, Task.status != TaskStatus.done)
+        )
+    ).scalar_one()
+    decision_count = (
+        await db.execute(select(func.count()).select_from(Decision).where(Decision.workspace_id == workspace.id))
+    ).scalar_one()
     presences = (
         (
             await db.execute(
@@ -97,8 +117,8 @@ async def workspace_summary(
     return WorkspaceSummary(
         slug=workspace.slug,
         name=workspace.name,
-        task_count=len(tasks),
-        open_task_count=sum(1 for t in tasks if t.status != TaskStatus.done),
-        decision_count=len(decisions),
+        task_count=task_count,
+        open_task_count=open_task_count,
+        decision_count=decision_count,
         active_developers=active_developers,
     )

@@ -113,6 +113,14 @@ async def _round_trip(base: str, key: str) -> None:
     search = await client.search_context(slug, "integration")
     assert any(t["id"] == created["id"] for t in search["tasks"])
 
+    # Delete round-trip: the same calls the delete_task/delete_decision tools wrap.
+    await client.delete_decision(slug, decision["id"])
+    await client.delete_task(slug, created["id"])
+    decisions = await client.recent_decisions(slug)
+    assert not any(d["id"] == decision["id"] for d in decisions)
+    tasks = await client.current_tasks(slug)
+    assert not any(t["id"] == created["id"] for t in tasks)
+
     await client.close()
 
 

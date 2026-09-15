@@ -137,7 +137,7 @@ class RedisEventBus:
             if message and message.get("type") == "message":
                 try:
                     data = json.loads(message["data"])
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     continue
                 _offer(queue, data)
             else:

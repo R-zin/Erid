@@ -42,31 +42,83 @@ export function useWorkspace(slug, credential, authType) {
     load().catch((e) => setError(authMessage(e)))
   }, [slug, load])
 
-  // Real-time stream.
+  // Real-time stream: reconnect with exponential backoff (mirrors the hub
+  // bridge), apply events locally, and refresh only the tiny summary on a
+  // trailing debounce — never the 4-collection reload per frame.
   useEffect(() => {
     if (!slug) return undefined
     const client = makeClient({ slug, credential, authType })
-    const ws = new WebSocket(client.socketUrl())
-    wsRef.current = ws
+    let cancelled = false
+    let ws = null
+    let retries = 0
+    let retryTimer = null
+    let summaryTimer = null
 
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onerror = () => setConnected(false)
-    ws.onmessage = (msg) => {
-      const event = JSON.parse(msg.data)
-      applyEvent(event, { setTasks, setDecisions, setPresence })
-      // Keep the header summary fresh on any change.
-      load().catch(() => {})
+    const scheduleSummary = () => {
+      clearTimeout(summaryTimer)
+      summaryTimer = setTimeout(() => {
+        client.summary().then(setSummary).catch(() => {})
+      }, SUMMARY_DEBOUNCE)
     }
 
+    const connectWs = () => {
+      if (cancelled) return
+      ws = new WebSocket(client.socketUrl())
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        retries = 0
+        setConnected(true)
+      }
+      ws.onmessage = (msg) => {
+        let event
+        try {
+          event = JSON.parse(msg.data)
+        } catch {
+          return // malformed frame: drop, keep streaming
+        }
+        if (event.type === 'ping') return // keepalive
+        if (event.type === 'workspace_deleted') {
+          setError(`Workspace '${slug}' was deleted.`)
+          ws.close() // deliberate; onclose sees wsRef.current !== ws → no reconnect
+          wsRef.current = null
+          return
+        }
+        applyEvent(event, { setTasks, setDecisions, setPresence })
+        if (event.type.startsWith('task_') || event.type.startsWith('decision_')) scheduleSummary()
+      }
+      ws.onclose = () => {
+        setConnected(false)
+        if (cancelled || wsRef.current !== ws) return // deliberate teardown / stale socket
+        wsRef.current = null
+        const delay = Math.min(BACKOFF_MIN * 2 ** retries, BACKOFF_MAX)
+        retries += 1
+        retryTimer = setTimeout(() => {
+          load().catch(() => {}) // authoritative resync after a drop
+          connectWs()
+        }, delay)
+      }
+      ws.onerror = () => {} // onclose always follows; single reconnect path
+    }
+    connectWs()
+
     return () => {
-      ws.close()
-      wsRef.current = null
+      cancelled = true
+      clearTimeout(retryTimer)
+      clearTimeout(summaryTimer)
+      if (wsRef.current) {
+        wsRef.current = null
+        ws.close()
+      }
     }
   }, [slug, credential, authType, load])
 
   return { summary, tasks, decisions, presence, connected, error, reload: load, setTasks, setDecisions }
 }
+
+const BACKOFF_MIN = 1000
+const BACKOFF_MAX = 30000
+const SUMMARY_DEBOUNCE = 500
 
 function authMessage(e) {
   if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
@@ -75,20 +127,24 @@ function authMessage(e) {
   return e.message
 }
 
-function applyEvent(event, { setTasks, setDecisions, setPresence }) {
+export function applyEvent(event, { setTasks, setDecisions, setPresence }) {
   const { type, data } = event
   if (type === 'task_created') {
     setTasks((prev) => upsertById(prev, data))
   } else if (type === 'task_updated') {
     setTasks((prev) => upsertById(prev, data))
+  } else if (type === 'task_deleted') {
+    setTasks((prev) => prev.filter((t) => t.id !== data.id))
   } else if (type === 'decision_created') {
     setDecisions((prev) => [data, ...prev.filter((d) => d.id !== data.id)])
+  } else if (type === 'decision_deleted') {
+    setDecisions((prev) => prev.filter((d) => d.id !== data.id))
   } else if (type === 'presence_updated') {
     setPresence((prev) => upsertById(prev, data))
   }
 }
 
-function upsertById(list, item) {
+export function upsertById(list, item) {
   const idx = list.findIndex((x) => x.id === item.id)
   if (idx === -1) return [...list, item]
   const next = list.slice()

@@ -27,7 +27,7 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
   const request = async (path, options = {}) => {
     const r = await fetch(`${root}${path}`, { headers, ...options })
     if (!r.ok) throw new ApiError(r.status, r.statusText)
-    return r.json()
+    return r.status === 204 ? null : r.json() // DELETE → No Content
   }
 
   const get = (path) => request(path)
@@ -37,6 +37,13 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
+  const put = (path, body) =>
+    request(path, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const del = (path) => request(path, { method: 'DELETE' })
 
   return {
     summary: () => get('/summary'),
@@ -45,6 +52,9 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
     presence: () => get('/presence'),
     createTask: (task) => post('/tasks', task),
     createDecision: (decision) => post('/decisions', decision),
+    updateTask: (id, patch) => put(`/tasks/${id}`, patch),
+    deleteTask: (id) => del(`/tasks/${id}`),
+    deleteDecision: (id) => del(`/decisions/${id}`),
 
     socketUrl() {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'

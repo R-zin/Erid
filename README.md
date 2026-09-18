@@ -469,3 +469,6 @@ These were open items tracked here; all are now done:
 - [x] **API hardening & perf** — the `/ws` stream sends an app-level `ping`
   keepalive so dead clients drop instead of blocking forever, the SQLite search
   fallback escapes LIKE wildcards, and `/summary` aggregates counts in SQL.
+
+Check out [Research Paper](https://drive.google.com/file/d/1gFSSAxbWy4txFI136YwJRoDZ-aqFqWOf/view?usp=sharing "Research Paper").
+

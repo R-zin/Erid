@@ -23,6 +23,8 @@ from app.models.models import (
     ActorRole,
     Decision,
     Grant,
+    Handoff,
+    HandoffStatus,
     Permission,
     Presence,
     Task,
@@ -36,6 +38,8 @@ from app.schemas.schemas import (
     ActorToken,
     DecisionIn,
     DecisionOut,
+    HandoffIn,
+    HandoffOut,
     PresenceIn,
     PresenceOut,
     TaskIn,
@@ -461,6 +465,165 @@ async def delete_decision(
     await db.delete(decision)
     await db.commit()
     await _publish(workspace.slug, "decision_deleted", {"id": str(decision_id), "workspace_id": str(workspace.id)})
+
+
+# ---------------------------------------------------------------------------
+# Session handoffs
+# ---------------------------------------------------------------------------
+
+
+async def _get_handoff_or_404(db: AsyncSession, workspace: Workspace, handoff_id: uuid.UUID) -> Handoff:
+    result = await db.execute(select(Handoff).where(Handoff.id == handoff_id, Handoff.workspace_id == workspace.id))
+    handoff = result.scalars().first()
+    if handoff is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"handoff '{handoff_id}' not found")
+    return handoff
+
+
+@router.get("/workspaces/{slug}/handoffs", response_model=list[HandoffOut])
+async def list_handoffs(
+    status_filter: HandoffStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=20, ge=1, le=100),
+    principal: Principal = Depends(require_action(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> list[HandoffOut]:
+    """List handoffs in a workspace (newest first), optionally filtered by status."""
+    stmt = (
+        select(Handoff)
+        .where(Handoff.workspace_id == principal.workspace.id)
+        .order_by(Handoff.created_at.desc())
+        .limit(limit)
+    )
+    if status_filter is not None:
+        stmt = stmt.where(Handoff.status == status_filter)
+    result = await db.execute(stmt)
+    return [HandoffOut.model_validate(h) for h in result.scalars().all()]
+
+
+@router.get("/workspaces/{slug}/handoffs/{handoff_id}", response_model=HandoffOut)
+async def get_handoff(
+    handoff_id: uuid.UUID,
+    principal: Principal = Depends(require_action(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> HandoffOut:
+    """Fetch a single handoff by id."""
+    handoff = await _get_handoff_or_404(db, principal.workspace, handoff_id)
+    return HandoffOut.model_validate(handoff)
+
+
+@router.post("/workspaces/{slug}/handoffs", response_model=HandoffOut, status_code=status.HTTP_201_CREATED)
+async def create_handoff(
+    payload: HandoffIn,
+    principal: Principal = Depends(require_action(Permission.write_handoffs)),
+    db: AsyncSession = Depends(get_db),
+) -> HandoffOut:
+    """Record a session handoff so another session can resume safely.
+
+    ``created_by`` defaults to the authenticated actor's name; pass it explicitly
+    only when reporting on someone else's behalf (e.g. the legacy workspace key).
+    """
+    workspace = principal.workspace
+    # If linking to a task, it must exist in this workspace.
+    if payload.task_id is not None:
+        task = (
+            (await db.execute(select(Task).where(Task.id == payload.task_id, Task.workspace_id == workspace.id)))
+            .scalars()
+            .first()
+        )
+        if task is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"task '{payload.task_id}' not found in workspace",
+            )
+    handoff = Handoff(
+        workspace_id=workspace.id,
+        task_id=payload.task_id,
+        # Legacy-key principals have no actor row; attribute those to the
+        # workspace slug (matching the name they get when minting a JWT).
+        created_by=payload.created_by or principal.actor_name or workspace.slug,
+        recipient=payload.recipient,
+        branch=payload.branch,
+        worktree=payload.worktree,
+        summary=payload.summary,
+        files_changed=payload.files_changed,
+        commands_run=payload.commands_run,
+        blockers=payload.blockers,
+        next_action=payload.next_action,
+    )
+    db.add(handoff)
+    await db.commit()
+    await db.refresh(handoff)
+    await _publish(workspace.slug, "handoff_created", HandoffOut.model_validate(handoff).model_dump(mode="json"))
+    return HandoffOut.model_validate(handoff)
+
+
+@router.post("/workspaces/{slug}/handoffs/{handoff_id}/acknowledge", response_model=HandoffOut)
+async def acknowledge_handoff(
+    handoff_id: uuid.UUID,
+    principal: Principal = Depends(require_action(Permission.write_handoffs)),
+    db: AsyncSession = Depends(get_db),
+) -> HandoffOut:
+    """Mark a handoff as picked up (open → acknowledged). Idempotent when already acknowledged."""
+    workspace = principal.workspace
+    handoff = await _get_handoff_or_404(db, workspace, handoff_id)
+    if handoff.status == HandoffStatus.resolved:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="handoff is already resolved")
+    if handoff.status == HandoffStatus.open:
+        handoff.status = HandoffStatus.acknowledged
+        handoff.acknowledged_at = datetime.now(UTC)
+        handoff.acknowledged_by = principal.actor_name
+        await db.commit()
+        await db.refresh(handoff)
+        await _publish(workspace.slug, "handoff_updated", HandoffOut.model_validate(handoff).model_dump(mode="json"))
+    return HandoffOut.model_validate(handoff)
+
+
+@router.post("/workspaces/{slug}/handoffs/{handoff_id}/resolve", response_model=HandoffOut)
+async def resolve_handoff(
+    handoff_id: uuid.UUID,
+    principal: Principal = Depends(require_action(Permission.write_handoffs)),
+    db: AsyncSession = Depends(get_db),
+) -> HandoffOut:
+    """Mark a handoff as completed (open/acknowledged → resolved). Idempotent when already resolved."""
+    workspace = principal.workspace
+    handoff = await _get_handoff_or_404(db, workspace, handoff_id)
+    if handoff.status != HandoffStatus.resolved:
+        handoff.status = HandoffStatus.resolved
+        handoff.resolved_at = datetime.now(UTC)
+        handoff.resolved_by = principal.actor_name
+        await db.commit()
+        await db.refresh(handoff)
+        await _publish(workspace.slug, "handoff_updated", HandoffOut.model_validate(handoff).model_dump(mode="json"))
+    return HandoffOut.model_validate(handoff)
+
+
+@router.delete("/workspaces/{slug}/handoffs/{handoff_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_handoff(
+    handoff_id: uuid.UUID,
+    principal: Principal = Depends(require_action(Permission.write_handoffs)),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete a handoff."""
+    workspace = principal.workspace
+    handoff = await _get_handoff_or_404(db, workspace, handoff_id)
+    await db.delete(handoff)
+    await db.commit()
+    await _publish(workspace.slug, "handoff_deleted", {"id": str(handoff_id), "workspace_id": str(workspace.id)})
+
+
+@router.get("/workspaces/{slug}/tasks/{task_id}/handoffs", response_model=list[HandoffOut])
+async def list_task_handoffs(
+    task_id: uuid.UUID,
+    principal: Principal = Depends(require_action(Permission.read)),
+    db: AsyncSession = Depends(get_db),
+) -> list[HandoffOut]:
+    """List handoffs that reference a task (newest first)."""
+    result = await db.execute(
+        select(Handoff)
+        .where(Handoff.workspace_id == principal.workspace.id, Handoff.task_id == task_id)
+        .order_by(Handoff.created_at.desc())
+    )
+    return [HandoffOut.model_validate(h) for h in result.scalars().all()]
 
 
 # ---------------------------------------------------------------------------

@@ -92,6 +92,7 @@ button.ghost.danger:hover { border-color: var(--red); color: var(--red); }
 button.small-toggle { padding: 2px 4px; font-size: 11px; border: none; color: var(--muted); }
 button.small-toggle:hover { color: var(--accent); border: none; }
 .task.optimistic { opacity: 0.6; }
+.handoff.optimistic { opacity: 0.6; }
 .error.inline { margin: 8px 0; }
 .hint { margin: 4px 0 10px; }
 
@@ -105,7 +106,7 @@ button.small-toggle:hover { color: var(--accent); border: none; }
 .stat-value { font-size: 22px; font-weight: 600; }
 .stat-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
 
-.grid { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 16px; align-items: start; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
 .card h2 { margin: 0 0 12px; font-size: 15px; }
 .card ul { list-style: none; margin: 0; padding: 0; }
@@ -132,6 +133,19 @@ button.small-toggle:hover { color: var(--accent); border: none; }
 .decision { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .decision:last-child { border-bottom: none; }
 .decision-title { font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+
+.handoff { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.handoff:last-child { border-bottom: none; }
+.handoff .decision-title { justify-content: flex-start; }
+.handoff-status {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+  text-transform: uppercase; letter-spacing: 0.4px; flex-shrink: 0; font-weight: 600;
+}
+.handoff-status.open { background: rgba(76, 141, 255, 0.18); color: var(--accent); }
+.handoff-status.acknowledged { background: rgba(240, 173, 78, 0.18); color: var(--yellow, #f0ad4e); }
+.handoff-status.resolved { background: rgba(56, 193, 114, 0.18); color: var(--green); }
+.handoff-create { margin-bottom: 10px; }
+.handoff-create .task-create-row { flex-wrap: wrap; }
 
 .muted { color: var(--muted); }
 .small { font-size: 12px; }

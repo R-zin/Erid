@@ -145,3 +145,47 @@ async def test_list_workspaces_index(api_base):
     assert any(w["slug"] == slug for w in workspaces)
 
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_handoff_tool_round_trip(api_base):
+    """The calls behind create_handoff/recent_handoffs/acknowledge/resolve work
+    end to end over real HTTP, and open handoffs show up in the summary."""
+    base, key = api_base
+    client = APIClient(base_url=base, api_key=key)
+    slug = f"mcp-test-{uuid.uuid4().hex[:8]}"
+
+    task = await client.create_task(slug, "handoff target", created_by="pytest")
+    handoff = await client.create_handoff(
+        slug,
+        "finished the API slice",
+        task_id=task["id"],
+        branch="feature/handoffs",
+        files_changed="api/app/models/models.py",
+        commands_run="pytest -q — all green",
+        next_action="wire the MCP tools",
+        created_by="pytest",
+    )
+    assert handoff["status"] == "open"
+    assert handoff["task_id"] == task["id"]
+
+    listed = await client.list_handoffs(slug, status="open")
+    assert [h["id"] for h in listed] == [handoff["id"]]
+
+    summary = await client.workspace_summary(slug)
+    assert summary["open_handoff_count"] == 1
+
+    acked = await client.acknowledge_handoff(slug, handoff["id"])
+    assert acked["status"] == "acknowledged"
+    assert acked["acknowledged_at"] is not None
+
+    resolved = await client.resolve_handoff(slug, handoff["id"])
+    assert resolved["status"] == "resolved"
+    assert resolved["resolved_at"] is not None
+
+    open_after = await client.list_handoffs(slug, status="open")
+    assert open_after == []
+    summary = await client.workspace_summary(slug)
+    assert summary["open_handoff_count"] == 0
+
+    await client.close()

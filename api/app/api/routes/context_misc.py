@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.routes.context import STALE_AFTER, _search_vector
 from app.core.security import Principal, require_action
 from app.db.session import get_db
-from app.models.models import Decision, Permission, Presence, Task, TaskStatus
+from app.models.models import Decision, Handoff, HandoffStatus, Permission, Presence, Task, TaskStatus
 from app.schemas.schemas import DecisionOut, TaskOut, WorkspaceSummary
 
 router = APIRouter()
@@ -101,6 +101,14 @@ async def workspace_summary(
     decision_count = (
         await db.execute(select(func.count()).select_from(Decision).where(Decision.workspace_id == workspace.id))
     ).scalar_one()
+    # Handoffs still needing a pickup (acknowledged ones are in flight, not open).
+    open_handoff_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(Handoff)
+            .where(Handoff.workspace_id == workspace.id, Handoff.status == HandoffStatus.open)
+        )
+    ).scalar_one()
     presences = (
         (
             await db.execute(
@@ -120,5 +128,6 @@ async def workspace_summary(
         task_count=task_count,
         open_task_count=open_task_count,
         decision_count=decision_count,
+        open_handoff_count=open_handoff_count,
         active_developers=active_developers,
     )

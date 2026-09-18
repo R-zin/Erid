@@ -5,6 +5,7 @@ import { makeClient } from './api.js'
 import Presence from './components/Presence.jsx'
 import TaskList from './components/TaskList.jsx'
 import DecisionList from './components/DecisionList.jsx'
+import HandoffList from './components/HandoffList.jsx'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher.jsx'
 import OAuthLogin from './components/OAuthLogin.jsx'
 
@@ -39,7 +40,7 @@ export default function App() {
   const authType = active?.authType || 'key'
   const slug = active?.slug || ''
 
-  const { summary, tasks, decisions, presence, connected, error, setTasks, setDecisions } =
+  const { summary, tasks, decisions, handoffs, presence, connected, error, setTasks, setDecisions, setHandoffs } =
     useWorkspace(slug, credential, authType)
 
   // A client bound to the active workspace for mutations (task create). Null
@@ -94,6 +95,7 @@ export default function App() {
           <Stat label="Tasks" value={summary.task_count} />
           <Stat label="Open" value={summary.open_task_count} />
           <Stat label="Decisions" value={summary.decision_count} />
+          <Stat label="Handoffs" value={summary.open_handoff_count ?? 0} />
           <Stat label="Active" value={summary.active_developers.length} />
         </section>
       )}
@@ -107,6 +109,13 @@ export default function App() {
           canWrite={!!credential}
           tasks={tasks}
           onMutate={setDecisions}
+        />
+        <HandoffList
+          handoffs={handoffs}
+          client={client}
+          canWrite={!!credential}
+          tasks={tasks}
+          onMutate={setHandoffs}
         />
       </main>
     </div>

@@ -144,6 +144,61 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    # -- handoffs -----------------------------------------------------------
+    async def list_handoffs(self, slug: str, status: str | None = None, limit: int | None = None):
+        params: dict[str, object] = {}
+        if status:
+            params["status"] = status
+        if limit is not None:
+            params["limit"] = limit
+        r = await self._client.get(self._url(slug, "/handoffs"), params=params or None)
+        r.raise_for_status()
+        return r.json()
+
+    async def create_handoff(
+        self,
+        slug: str,
+        summary: str,
+        task_id: str | None = None,
+        recipient: str | None = None,
+        branch: str | None = None,
+        worktree: str | None = None,
+        files_changed: str | None = None,
+        commands_run: str | None = None,
+        blockers: str | None = None,
+        next_action: str | None = None,
+        created_by: str | None = None,
+    ):
+        body = {
+            k: v
+            for k, v in {
+                "summary": summary,
+                "task_id": task_id,
+                "recipient": recipient,
+                "branch": branch,
+                "worktree": worktree,
+                "files_changed": files_changed,
+                "commands_run": commands_run,
+                "blockers": blockers,
+                "next_action": next_action,
+                "created_by": created_by,
+            }.items()
+            if v is not None
+        }
+        r = await self._client.post(self._url(slug, "/handoffs"), json=body)
+        r.raise_for_status()
+        return r.json()
+
+    async def acknowledge_handoff(self, slug: str, handoff_id: str):
+        r = await self._client.post(self._url(slug, f"/handoffs/{handoff_id}/acknowledge"))
+        r.raise_for_status()
+        return r.json()
+
+    async def resolve_handoff(self, slug: str, handoff_id: str):
+        r = await self._client.post(self._url(slug, f"/handoffs/{handoff_id}/resolve"))
+        r.raise_for_status()
+        return r.json()
+
     async def update_presence(
         self,
         slug: str,

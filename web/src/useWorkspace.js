@@ -9,6 +9,7 @@ export function useWorkspace(slug, credential, authType) {
   const [summary, setSummary] = useState(null)
   const [tasks, setTasks] = useState([])
   const [decisions, setDecisions] = useState([])
+  const [handoffs, setHandoffs] = useState([])
   const [presence, setPresence] = useState([])
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState(null)
@@ -16,15 +17,17 @@ export function useWorkspace(slug, credential, authType) {
 
   const load = useCallback(async () => {
     const client = makeClient({ slug, credential, authType })
-    const [s, t, d, p] = await Promise.all([
+    const [s, t, d, h, p] = await Promise.all([
       client.summary(),
       client.tasks(),
       client.decisions(),
+      client.handoffs(),
       client.presence(),
     ])
     setSummary(s)
     setTasks(t)
     setDecisions(d)
+    setHandoffs(h)
     setPresence(p)
   }, [slug, credential, authType])
 
@@ -34,6 +37,7 @@ export function useWorkspace(slug, credential, authType) {
       setSummary(null)
       setTasks([])
       setDecisions([])
+      setHandoffs([])
       setPresence([])
       setError(null)
       return
@@ -84,8 +88,13 @@ export function useWorkspace(slug, credential, authType) {
           wsRef.current = null
           return
         }
-        applyEvent(event, { setTasks, setDecisions, setPresence })
-        if (event.type.startsWith('task_') || event.type.startsWith('decision_')) scheduleSummary()
+        applyEvent(event, { setTasks, setDecisions, setHandoffs, setPresence })
+        if (
+          event.type.startsWith('task_') ||
+          event.type.startsWith('decision_') ||
+          event.type.startsWith('handoff_')
+        )
+          scheduleSummary()
       }
       ws.onclose = () => {
         setConnected(false)
@@ -113,7 +122,19 @@ export function useWorkspace(slug, credential, authType) {
     }
   }, [slug, credential, authType, load])
 
-  return { summary, tasks, decisions, presence, connected, error, reload: load, setTasks, setDecisions }
+  return {
+    summary,
+    tasks,
+    decisions,
+    handoffs,
+    presence,
+    connected,
+    error,
+    reload: load,
+    setTasks,
+    setDecisions,
+    setHandoffs,
+  }
 }
 
 const BACKOFF_MIN = 1000
@@ -127,7 +148,7 @@ function authMessage(e) {
   return e.message
 }
 
-export function applyEvent(event, { setTasks, setDecisions, setPresence }) {
+export function applyEvent(event, { setTasks, setDecisions, setHandoffs, setPresence }) {
   const { type, data } = event
   if (type === 'task_created') {
     setTasks((prev) => upsertById(prev, data))
@@ -139,6 +160,13 @@ export function applyEvent(event, { setTasks, setDecisions, setPresence }) {
     setDecisions((prev) => [data, ...prev.filter((d) => d.id !== data.id)])
   } else if (type === 'decision_deleted') {
     setDecisions((prev) => prev.filter((d) => d.id !== data.id))
+  } else if (type === 'handoff_created') {
+    setHandoffs?.((prev) => [data, ...prev.filter((h) => h.id !== data.id)])
+  } else if (type === 'handoff_updated') {
+    // Handoffs are recency-ordered; an update (ack/resolve) keeps its position.
+    setHandoffs?.((prev) => upsertById(prev, data))
+  } else if (type === 'handoff_deleted') {
+    setHandoffs?.((prev) => prev.filter((h) => h.id !== data.id))
   } else if (type === 'presence_updated') {
     setPresence((prev) => upsertById(prev, data))
   }

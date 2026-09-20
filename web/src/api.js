@@ -49,12 +49,17 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
     summary: () => get('/summary'),
     tasks: () => get('/tasks'),
     decisions: () => get('/decisions'),
+    handoffs: () => get('/handoffs'),
     presence: () => get('/presence'),
     createTask: (task) => post('/tasks', task),
     createDecision: (decision) => post('/decisions', decision),
+    createHandoff: (handoff) => post('/handoffs', handoff),
+    acknowledgeHandoff: (id) => post(`/handoffs/${id}/acknowledge`),
+    resolveHandoff: (id) => post(`/handoffs/${id}/resolve`),
     updateTask: (id, patch) => put(`/tasks/${id}`, patch),
     deleteTask: (id) => del(`/tasks/${id}`),
     deleteDecision: (id) => del(`/decisions/${id}`),
+    deleteHandoff: (id) => del(`/handoffs/${id}`),
 
     socketUrl() {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'

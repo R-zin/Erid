@@ -12,13 +12,14 @@ function makeStore(initial) {
   }
 }
 
-function wireSetters({ tasks = [], decisions = [], presence = [] } = {}) {
+function wireSetters({ tasks = [], decisions = [], handoffs = [], presence = [] } = {}) {
   const t = makeStore(tasks)
   const d = makeStore(decisions)
+  const h = makeStore(handoffs)
   const p = makeStore(presence)
   return {
-    setters: { setTasks: t.set, setDecisions: d.set, setPresence: p.set },
-    stores: { t, d, p },
+    setters: { setTasks: t.set, setDecisions: d.set, setHandoffs: h.set, setPresence: p.set },
+    stores: { t, d, h, p },
   }
 }
 
@@ -59,6 +60,33 @@ describe('applyEvent', () => {
     expect(stores.d.get()).toEqual([{ id: 'd1' }])
   })
 
+  it('prepends on handoff_created and dedupes by id', () => {
+    const { setters, stores } = wireSetters({ handoffs: [{ id: 'h1', status: 'open' }] })
+    applyEvent({ type: 'handoff_created', data: { id: 'h2', status: 'open' } }, setters)
+    applyEvent({ type: 'handoff_created', data: { id: 'h2', status: 'open', v: 2 } }, setters)
+    expect(stores.h.get()).toEqual([{ id: 'h2', status: 'open', v: 2 }, { id: 'h1', status: 'open' }])
+  })
+
+  it('updates in place on handoff_updated (acknowledge/resolve)', () => {
+    const { setters, stores } = wireSetters({
+      handoffs: [
+        { id: 'h1', status: 'open' },
+        { id: 'h2', status: 'open' },
+      ],
+    })
+    applyEvent({ type: 'handoff_updated', data: { id: 'h2', status: 'resolved' } }, setters)
+    expect(stores.h.get()).toEqual([
+      { id: 'h1', status: 'open' },
+      { id: 'h2', status: 'resolved' },
+    ])
+  })
+
+  it('removes on handoff_deleted (payload is {id, workspace_id})', () => {
+    const { setters, stores } = wireSetters({ handoffs: [{ id: 'h1' }, { id: 'h2' }] })
+    applyEvent({ type: 'handoff_deleted', data: { id: 'h1', workspace_id: 'w' } }, setters)
+    expect(stores.h.get()).toEqual([{ id: 'h2' }])
+  })
+
   it('upserts on presence_updated', () => {
     const { setters, stores } = wireSetters({ presence: [{ id: 'p1', actor_name: 'a' }] })
     applyEvent({ type: 'presence_updated', data: { id: 'p1', actor_name: 'a', current_file: 'x' } }, setters)
@@ -69,12 +97,14 @@ describe('applyEvent', () => {
     const { setters, stores } = wireSetters({
       tasks: [{ id: 't1' }],
       decisions: [{ id: 'd1' }],
+      handoffs: [{ id: 'h1' }],
       presence: [{ id: 'p1' }],
     })
     applyEvent({ type: 'ping' }, setters)
     applyEvent({ type: 'some_future_event', data: { id: 'z' } }, setters)
     expect(stores.t.get()).toEqual([{ id: 't1' }])
     expect(stores.d.get()).toEqual([{ id: 'd1' }])
+    expect(stores.h.get()).toEqual([{ id: 'h1' }])
     expect(stores.p.get()).toEqual([{ id: 'p1' }])
   })
 })

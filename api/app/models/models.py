@@ -20,6 +20,17 @@ class TaskStatus(str, enum.Enum):
     blocked = "blocked"
 
 
+class HandoffStatus(str, enum.Enum):
+    """Lifecycle of a session handoff.
+
+    open → acknowledged → resolved; ``open`` can also go straight to ``resolved``.
+    """
+
+    open = "open"
+    acknowledged = "acknowledged"
+    resolved = "resolved"
+
+
 class ActorRole(str, enum.Enum):
     """Coarse identity tier for an actor. Grants fine-tune below this."""
 
@@ -35,9 +46,10 @@ class Permission(str, enum.Enum):
     when it holds the matching permission (``owner`` implies all).
     """
 
-    read = "read"  # tasks/decisions/summary/search/presence reads
+    read = "read"  # tasks/decisions/summary/search/presence/handoff reads
     write_tasks = "write_tasks"  # create/update tasks
     write_decisions = "write_decisions"  # create decisions
+    write_handoffs = "write_handoffs"  # create/acknowledge/resolve handoffs
     presence = "presence"  # update presence heartbeat
     admin_keys = "admin_keys"  # mint/revoke actor keys, manage roles/grants
     owner = "owner"  # full access; implies every other permission
@@ -47,7 +59,13 @@ class Permission(str, enum.Enum):
 ROLE_GRANTS: dict[ActorRole, frozenset[Permission]] = {
     ActorRole.reader: frozenset({Permission.read}),
     ActorRole.writer: frozenset(
-        {Permission.read, Permission.write_tasks, Permission.write_decisions, Permission.presence}
+        {
+            Permission.read,
+            Permission.write_tasks,
+            Permission.write_decisions,
+            Permission.write_handoffs,
+            Permission.presence,
+        }
     ),
     ActorRole.owner: frozenset(),  # implies everything
 }
@@ -66,6 +84,7 @@ class Workspace(Base):
 
     tasks: Mapped[list[Task]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     decisions: Mapped[list[Decision]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    handoffs: Mapped[list[Handoff]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     presences: Mapped[list[Presence]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     actors: Mapped[list[Actor]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
 
@@ -146,6 +165,8 @@ class Task(Base):
     workspace: Mapped[Workspace] = relationship(back_populates="tasks")
     # Decisions linked to this task (decision ↔ task linking).
     decisions: Mapped[list[Decision]] = relationship(back_populates="task")
+    # Handoffs that reference this task.
+    handoffs: Mapped[list[Handoff]] = relationship(back_populates="task")
 
 
 class Decision(Base):
@@ -166,6 +187,42 @@ class Decision(Base):
 
     workspace: Mapped[Workspace] = relationship(back_populates="decisions")
     task: Mapped[Task | None] = relationship(back_populates="decisions", foreign_keys=[task_id])
+
+
+class Handoff(Base):
+    """A durable session handoff: one actor's state of play for whoever picks up next.
+
+    Records what was done, what changed, what ran, and what should happen next so
+    a fresh agent or developer can resume safely without re-deriving context.
+    """
+
+    __tablename__ = "handoffs"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    # Optional task this handoff advances; SET NULL keeps the handoff if the task is deleted.
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    # Who the handoff is aimed at (optional); informational only.
+    recipient: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    branch: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    worktree: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    summary: Mapped[str] = mapped_column(Text)
+    files_changed: Mapped[str | None] = mapped_column(Text, nullable=True)
+    commands_run: Mapped[str | None] = mapped_column(Text, nullable=True)
+    blockers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[HandoffStatus] = mapped_column(Enum(HandoffStatus), default=HandoffStatus.open, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    workspace: Mapped[Workspace] = relationship(back_populates="handoffs")
+    task: Mapped[Task | None] = relationship(back_populates="handoffs", foreign_keys=[task_id])
 
 
 class Presence(Base):

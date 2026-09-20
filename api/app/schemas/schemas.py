@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from app.models.models import ActorRole, Permission, TaskStatus
+from app.models.models import ActorRole, HandoffStatus, Permission, TaskStatus
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -11,6 +11,7 @@ class WorkspaceSummary(BaseModel):
     task_count: int = 0
     open_task_count: int = 0
     decision_count: int = 0
+    open_handoff_count: int = 0
     active_developers: list[str] = Field(default_factory=list)
 
 
@@ -92,6 +93,49 @@ class TaskOut(BaseModel):
     created_by: str | None
     created_at: datetime
     updated_at: datetime | None
+
+
+# ---------------------------------------------------------------------------
+# Session handoffs
+# ---------------------------------------------------------------------------
+
+
+class HandoffIn(BaseModel):
+    """Create a handoff. ``summary`` is required; everything else is optional
+    context that helps the next session resume safely."""
+
+    summary: str = Field(min_length=1, max_length=8000)
+    task_id: uuid.UUID | None = None
+    recipient: str | None = Field(default=None, max_length=128)
+    branch: str | None = Field(default=None, max_length=256)
+    worktree: str | None = Field(default=None, max_length=512)
+    files_changed: str | None = Field(default=None, max_length=8000)
+    commands_run: str | None = Field(default=None, max_length=8000)
+    blockers: str | None = Field(default=None, max_length=8000)
+    next_action: str | None = Field(default=None, max_length=2000)
+    created_by: str | None = Field(default=None, max_length=128)
+
+
+class HandoffOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    task_id: uuid.UUID | None
+    created_by: str | None
+    recipient: str | None
+    branch: str | None
+    worktree: str | None
+    summary: str
+    files_changed: str | None
+    commands_run: str | None
+    blockers: str | None
+    next_action: str | None
+    status: HandoffStatus
+    created_at: datetime
+    acknowledged_at: datetime | None
+    acknowledged_by: str | None
+    resolved_at: datetime | None
+    resolved_by: str | None
 
 
 class PresenceIn(BaseModel):

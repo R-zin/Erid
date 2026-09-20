@@ -172,6 +172,77 @@ async def list_workspaces() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Session handoffs — durable state of play so another session can resume safely.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def create_handoff(
+    summary: str,
+    task_id: str | None = None,
+    recipient: str | None = None,
+    branch: str | None = None,
+    worktree: str | None = None,
+    files_changed: str | None = None,
+    commands_run: str | None = None,
+    blockers: str | None = None,
+    next_action: str | None = None,
+    created_by: str | None = None,
+    slug: str | None = None,
+) -> str:
+    """Leave a durable session handoff so the next agent/developer can resume safely.
+
+    Record what you finished, which files changed, which commands/tests you ran
+    (and their outcome), what's blocked, and the recommended next action. ``summary``
+    is required; the rest is optional context. ``created_by`` defaults to your
+    authenticated actor name — set it only to attribute the handoff to someone else."""
+    return _fmt(
+        await _get_client().create_handoff(
+            _slug(slug),
+            summary,
+            task_id=task_id,
+            recipient=recipient,
+            branch=branch,
+            worktree=worktree,
+            files_changed=files_changed,
+            commands_run=commands_run,
+            blockers=blockers,
+            next_action=next_action,
+            created_by=created_by,
+        )
+    )
+
+
+@mcp.tool()
+async def recent_handoffs(
+    status: str | None = None,
+    limit: int | None = None,
+    slug: str | None = None,
+) -> str:
+    """List handoffs in the workspace (newest first).
+
+    Filter by ``status`` (open, acknowledged, resolved) — pass ``open`` to see
+    what still needs a pickup."""
+    return _fmt(await _get_client().list_handoffs(_slug(slug), status=status, limit=limit))
+
+
+@mcp.tool()
+async def acknowledge_handoff(handoff_id: str, slug: str | None = None) -> str:
+    """Mark a handoff as picked up (open → acknowledged).
+
+    Call this when you start working from a handoff so others know it's in flight."""
+    return _fmt(await _get_client().acknowledge_handoff(_slug(slug), handoff_id))
+
+
+@mcp.tool()
+async def resolve_handoff(handoff_id: str, slug: str | None = None) -> str:
+    """Mark a handoff as completed (open/acknowledged → resolved).
+
+    Call this once the follow-up work the handoff described is done."""
+    return _fmt(await _get_client().resolve_handoff(_slug(slug), handoff_id))
+
+
+# ---------------------------------------------------------------------------
 # Resources — read-only snapshots a client can pull into context directly.
 # ---------------------------------------------------------------------------
 
@@ -204,6 +275,16 @@ async def tasks_resource(slug: str) -> str:
 )
 async def decisions_resource(slug: str) -> str:
     return _fmt(await _get_client().recent_decisions(_slug(slug)))
+
+
+@mcp.resource(
+    "workspace://{slug}/handoffs",
+    name="workspace_handoffs_resource",
+    description="Session handoffs in a workspace: what was done, what's blocked, and what to do next.",
+    mime_type="application/json",
+)
+async def handoffs_resource(slug: str) -> str:
+    return _fmt(await _get_client().list_handoffs(_slug(slug)))
 
 
 @mcp.resource(
@@ -255,9 +336,11 @@ async def standup_report_prompt(slug: str | None = None) -> str:
 async def catch_up_prompt(slug: str | None = None) -> str:
     resolved = _slug(slug)
     return (
-        f"I just joined workspace '{resolved}' and need to catch up. Call workspace_summary and "
-        "recent_decisions, then brief me on: the project's goal as implied by open tasks, the key decisions "
-        "already made (so I don't re-litigate them), who's active, and where I could pick up work."
+        f"I just joined workspace '{resolved}' and need to catch up. Call workspace_summary, "
+        "recent_handoffs (status 'open' first, then all), and recent_decisions, then brief me on: "
+        "the project's goal as implied by open tasks, any open handoffs waiting to be picked up "
+        "(their next_action and blockers), the key decisions already made (so I don't re-litigate "
+        "them), who's active, and where I could pick up work."
     )
 
 

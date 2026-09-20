@@ -41,8 +41,10 @@ invisible to the next, two agents redo the same analysis, and there's no shared
 list of what's in flight. The Hub externalizes that state into one store with a
 real-time feed, so:
 
-- **Continuity** — a new session calls `workspace_summary` and immediately knows
-  open tasks, recent decisions, and active collaborators.
+- **Continuity** — a new session calls `workspace_summary` (or `catch_up`) and
+  immediately knows open tasks, recent decisions, waiting handoffs, and active
+  collaborators. A wrapping-up session calls `create_handoff` to leave the state
+  of play for whoever picks up next.
 - **No duplicate work** — `search_context` / `recent_decisions` surface what's
   already been decided before re-deciding it.
 - **Coordination** — `update_presence` broadcasts "I'm editing `auth.py`" so
@@ -187,10 +189,12 @@ claude mcp add context-hub \
 
 Then the tools are available in-session: `workspace_summary`, `search_context`,
 `current_tasks`, `create_task`, `update_task`, `create_decision`,
-`recent_decisions`, `active_developers`, `update_presence`, `task_decisions`.
-The server also exposes read-only **resources** (`workspace://{slug}/summary`,
-`.../tasks`, `.../decisions`, `.../presence`) and **prompts**
-(`summarize_workspace`, `standup_report`, `catch_up`).
+`recent_decisions`, `active_developers`, `update_presence`, `task_decisions`,
+plus session handoffs: `create_handoff`, `recent_handoffs`, `acknowledge_handoff`,
+`resolve_handoff`. The server also exposes read-only **resources**
+(`workspace://{slug}/summary`, `.../tasks`, `.../decisions`, `.../handoffs`,
+`.../presence`) and **prompts** (`summarize_workspace`, `standup_report`,
+`catch_up` — which now briefs on open handoffs first).
 
 ## Auto-presence (file watch)
 
@@ -348,7 +352,7 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | POST   | `/workspaces/{slug}/secure`   | —†   | claim an open workspace (key shown once) |
 | POST   | `/workspaces/{slug}/rotate-key`| owner | rotate the workspace key        |
 | DELETE | `/workspaces/{slug}`          | owner| delete the workspace (cascades)  |
-| GET    | `/workspaces/{slug}/summary`  | key* | counts + active developers       |
+| GET    | `/workspaces/{slug}/summary`  | key* | counts + open handoffs + active developers |
 | GET    | `/workspaces/{slug}/search?q=`| key* | search decisions + tasks         |
 | GET    | `/workspaces/{slug}/tasks`    | key* | list (filter `?status=`)         |
 | POST   | `/workspaces/{slug}/tasks`    | key* | create                           |
@@ -357,6 +361,13 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | GET    | `/workspaces/{slug}/decisions`| key* | list recent (`?limit=`)          |
 | POST   | `/workspaces/{slug}/decisions`| key* | record a decision                |
 | DELETE | `/workspaces/{slug}/decisions/{id}`| key*| delete a decision           |
+| GET    | `/workspaces/{slug}/handoffs` | key* | list handoffs (filter `?status=`, `?limit=`) |
+| POST   | `/workspaces/{slug}/handoffs` | key* | create a session handoff         |
+| GET    | `/workspaces/{slug}/handoffs/{id}`| key* | fetch one handoff            |
+| POST   | `/workspaces/{slug}/handoffs/{id}/acknowledge`| key* | mark picked up (open → acknowledged) |
+| POST   | `/workspaces/{slug}/handoffs/{id}/resolve`| key* | mark done (→ resolved)       |
+| DELETE | `/workspaces/{slug}/handoffs/{id}`| key* | delete a handoff             |
+| GET    | `/workspaces/{slug}/tasks/{id}/handoffs`| key* | handoffs linked to a task |
 | GET    | `/workspaces/{slug}/presence` | key* | active collaborators             |
 | POST   | `/workspaces/{slug}/presence` | key* | presence heartbeat (upsert)      |
 | POST   | `/workspaces/{slug}/actors`   | admin| mint per-actor key (shown once)  |
@@ -441,6 +452,7 @@ Done (this iteration):
 - [x] Multi-instance MCP resources
 - [x] Dashboard decision-create UI
 - [x] Deploy/CI verification of the compose stack (healthchecked `docker-compose.yml`, `infra/deploy.sh`, `compose-verify` job)
+- [x] **Session handoffs** — durable `handoffs` resource (summary, files changed, commands run, blockers, next action, branch/task/recipient links) with an `open → acknowledged → resolved` lifecycle, REST CRUD + lifecycle endpoints, `write_handoffs` permission, `handoff_created/updated/deleted` WS events, MCP tools (`create_handoff`, `recent_handoffs`, `acknowledge_handoff`, `resolve_handoff`), a `workspace://{slug}/handoffs` resource, a `catch_up` prompt that briefs on open handoffs, dashboard list/create/pick-up/resolve UI, and `open_handoff_count` in the workspace summary.
 
 All roadmap items complete.
 

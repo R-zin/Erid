@@ -1,4 +1,4 @@
-# AI Context Hub
+# Erid - Realtime Context Server for AI
 
 A shared, real-time context server for AI coding tools. **Claude Code, Cursor,
 and Codex CLI all read from and write to the same project state** — tasks,

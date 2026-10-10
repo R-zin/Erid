@@ -40,9 +40,23 @@ if want ruff-check;  then run uv run ruff check api mcp-server tests .github/scr
 if want pytest;      then run uv run pytest -v --tb=short; fi
 if want web; then
   if [[ $DRY_RUN -eq 1 ]]; then
-    echo "+ (cd web && npm ci && npm run build)"
+    echo "+ (cd web && npm ci && npm test && npm run build)"
   else
-    (cd web && run npm ci && run npm run build)
+    (cd web && npm ci && npm test && npm run build)
+  fi
+fi
+if want vscode; then
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "+ (cd editors/vscode && npm ci && npm run typecheck && npm run compile)"
+  else
+    (cd editors/vscode && npm ci && npm run typecheck && npm run compile)
+  fi
+fi
+if want jetbrains; then
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "+ (cd editors/jetbrains && ./gradlew compileJava)"
+  else
+    (cd editors/jetbrains && ./gradlew compileJava)
   fi
 fi
 

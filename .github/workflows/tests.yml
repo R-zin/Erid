@@ -4,41 +4,74 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
   ruff-format:
     name: ruff-format
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv run ruff format --check api mcp-server tests .github/scripts
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Check code formatting
+        run: uv run ruff format --check api mcp-server tests .github/scripts
 
   ruff-check:
     name: ruff-check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv run ruff check api mcp-server tests .github/scripts
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Lint Python codebase
+        run: uv run ruff check api mcp-server tests .github/scripts
 
   pytest:
     name: pytest
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
-      - name: Run tests (SQLite in-memory; no services required)
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Verify dependency lockfile
+        run: uv sync --frozen
+
+      - name: Run test suite (SQLite in-memory)
         run: uv run pytest -v --tb=short
 
   integration:
     name: integration (Postgres + Redis)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -67,90 +100,192 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       EVENT_BUS_BACKEND: redis
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.14
-      - name: Start the API against real services
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start API against live services
         working-directory: api
         run: |
-          uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          set -euo pipefail
+          uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn.log 2>&1 &
+          UVICORN_PID=$!
+          echo "Started uvicorn (PID $UVICORN_PID); waiting for /health..."
           for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:8000/health && break || sleep 1
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+              echo "API is healthy and responding on port 8000 (attempt $i)."
+              exit 0
+            fi
+            if ! kill -0 $UVICORN_PID 2>/dev/null; then
+              echo "Uvicorn process crashed unexpectedly. Startup log:" >&2
+              cat /tmp/uvicorn.log >&2
+              exit 1
+            fi
+            sleep 1
           done
-      - name: Smoke-test the live API (Redis-backed event bus)
+          echo "Timed out waiting for API /health after 30 seconds. Startup log:" >&2
+          cat /tmp/uvicorn.log >&2
+          exit 1
+
+      - name: Smoke-test live API (Workspaces, Tasks, Decisions, Handoffs, Search)
         run: |
-          set -e
+          set -euo pipefail
+
+          echo "1. Probing health endpoint..."
           curl -sf http://127.0.0.1:8000/health
-          KEY=$(curl -sf -XPOST 'http://127.0.0.1:8000/api/workspaces?slug=ci' | uv run python -c 'import sys,json;print(json.load(sys.stdin)["api_key"])')
-          curl -sf -XPOST http://127.0.0.1:8000/api/workspaces/ci/tasks \
-            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"title":"ci smoke"}'
-          curl -sf http://127.0.0.1:8000/api/workspaces/ci/summary \
+
+          echo "2. Provisioning workspace 'ci'..."
+          KEY=$(curl -sf -XPOST 'http://127.0.0.1:8000/api/workspaces?slug=ci' \
+            | uv run python -c 'import sys,json; print(json.load(sys.stdin)["api_key"])')
+
+          echo "3. Creating task..."
+          TASK_RESP=$(curl -sf -XPOST http://127.0.0.1:8000/api/workspaces/ci/tasks \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"title":"ci smoke task"}')
+          TASK_ID=$(echo "$TASK_RESP" | uv run python -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          echo "4. Creating decision..."
+          curl -sf -XPOST http://127.0.0.1:8000/api/workspaces/ci/decisions \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            -d '{"title":"ci smoke decision","reason":"verify pipeline","task_id":"'"$TASK_ID"'"}'
+
+          echo "5. Creating and testing session handoff..."
+          HANDOFF_RESP=$(curl -sf -XPOST http://127.0.0.1:8000/api/workspaces/ci/handoffs \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            -d '{"summary":"ci smoke handoff","task_id":"'"$TASK_ID"'","next_action":"verify pipeline"}')
+          HANDOFF_ID=$(echo "$HANDOFF_RESP" | uv run python -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+          curl -sf -XPOST "http://127.0.0.1:8000/api/workspaces/ci/handoffs/$HANDOFF_ID/acknowledge" \
             -H "X-API-Key: $KEY"
-      - name: Run MCP tool round-trip against the live API
+
+          echo "6. Searching context..."
+          curl -sf "http://127.0.0.1:8000/api/workspaces/ci/search?q=smoke" \
+            -H "X-API-Key: $KEY"
+
+          echo "7. Verifying workspace summary..."
+          curl -sf http://127.0.0.1:8000/api/workspaces/ci/summary \
+            -H "X-API-Key: $KEY" \
+            | uv run python -c 'import sys,json; d=json.load(sys.stdin); assert d["task_count"] >= 1; assert d["open_handoff_count"] == 0'
+
+      - name: Run MCP tool round-trip against live API
         working-directory: mcp-server
         env:
           ERID_LIVE_API: http://127.0.0.1:8000
         run: uv run pytest tests/test_tools.py -v
 
+      - name: Dump API logs on failure
+        if: failure()
+        run: |
+          if [ -f /tmp/uvicorn.log ]; then
+            echo "=== Uvicorn Logs ==="
+            cat /tmp/uvicorn.log
+          fi
+
   web:
     name: web-build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - run: npm test
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build web SPA
+        run: npm run build
 
   vscode:
     name: vscode-extension
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: editors/vscode
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run compile
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck extension
+        run: npm run typecheck
+
+      - name: Compile extension
+        run: npm run compile
+
+      - name: Package extension (vsce)
+        run: npm run package
 
   jetbrains:
     name: jetbrains-plugin
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: editors/jetbrains
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
         with:
-          distribution: corretto
+          distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew compileJava
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Compile Java
+        run: ./gradlew compileJava
+
+      - name: Build plugin package
+        run: ./gradlew buildPlugin
 
   compose-verify:
     name: compose-verify (full stack)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - name: Build the compose images
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build compose images
         run: docker compose build
-      - name: Start the stack
+
+      - name: Start stack
         run: docker compose up -d postgres redis api web
-      - name: Wait for the API to become healthy
+
+      - name: Wait for API to become healthy
         run: |
           set -e
           for i in $(seq 1 60); do
@@ -159,13 +294,74 @@ jobs:
           echo "API did not become healthy" >&2
           docker compose logs --tail 100 api
           exit 1
-      - name: REST round-trip smoke
+
+      - name: Wait for Web frontend
         run: |
           set -e
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080 > /dev/null && exit 0 || sleep 1
+          done
+          echo "Web frontend did not become healthy" >&2
+          docker compose logs --tail 100 web
+          exit 1
+
+      - name: Full stack E2E REST smoke
+        run: |
+          set -euo pipefail
           SLUG="e2e-compose-$GITHUB_RUN_ID"
-          curl -sf -XPOST "http://localhost:8000/api/workspaces?slug=$SLUG"
+
+          echo "1. Provisioning workspace..."
+          KEY=$(curl -sf -XPOST "http://localhost:8000/api/workspaces?slug=$SLUG" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['api_key'])")
+
+          echo "2. Checking workspace in directory..."
           curl -sf http://localhost:8000/api/workspaces \
             | python3 -c "import sys,json; slugs=[w['slug'] for w in json.load(sys.stdin)]; assert '$SLUG' in slugs, f'workspace not listed: {slugs}'"
-      - name: Tear down
+
+          echo "3. Creating task..."
+          TASK_ID=$(curl -sf -XPOST "http://localhost:8000/api/workspaces/$SLUG/tasks" \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"title":"compose e2e task"}' \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          echo "4. Creating handoff..."
+          curl -sf -XPOST "http://localhost:8000/api/workspaces/$SLUG/handoffs" \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            -d '{"summary":"compose e2e handoff","task_id":"'"$TASK_ID"'","next_action":"verify"}'
+
+          echo "5. Verifying workspace summary..."
+          curl -sf "http://localhost:8000/api/workspaces/$SLUG/summary" \
+            -H "X-API-Key: $KEY" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['task_count'] >= 1; assert d['open_handoff_count'] >= 1"
+
+      - name: Dump Compose logs on failure
+        if: failure()
+        run: docker compose logs --tail 200
+
+      - name: Tear down stack
         if: always()
         run: docker compose down -v
+
+  ci-gate:
+    name: ci-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - ruff-format
+      - ruff-check
+      - pytest
+      - integration
+      - web
+      - vscode
+      - jetbrains
+      - compose-verify
+    if: always()
+    steps:
+      - name: Check all required jobs passed
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "CI job results: $results"
+          if [[ "$results" =~ (failure|cancelled) ]]; then
+            echo "::error::One or more upstream CI jobs failed or were cancelled."
+            exit 1
+          fi
+          echo "All CI pipeline checks passed successfully!"

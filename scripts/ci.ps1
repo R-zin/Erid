@@ -33,10 +33,26 @@ if (Want 'ruff-check')  { Invoke-Step 'uv run ruff check api mcp-server tests .g
 if (Want 'pytest')      { Invoke-Step 'uv run pytest -v --tb=short' }
 if (Want 'web') {
   if ($DryRun) {
-    Write-Host '+ (cd web; npm ci; npm run build)'
+    Write-Host '+ (cd web; npm ci; npm test; npm run build)'
   } else {
     Push-Location web
-    try { npm ci; npm run build } finally { Pop-Location }
+    try { npm ci; npm test; npm run build } finally { Pop-Location }
+  }
+}
+if (Want 'vscode') {
+  if ($DryRun) {
+    Write-Host '+ (cd editors/vscode; npm ci; npm run typecheck; npm run compile)'
+  } else {
+    Push-Location editors/vscode
+    try { npm ci; npm run typecheck; npm run compile } finally { Pop-Location }
+  }
+}
+if (Want 'jetbrains') {
+  if ($DryRun) {
+    Write-Host '+ (cd editors/jetbrains; .\gradlew.bat compileJava)'
+  } else {
+    Push-Location editors/jetbrains
+    try { .\gradlew.bat compileJava } finally { Pop-Location }
   }
 }
 

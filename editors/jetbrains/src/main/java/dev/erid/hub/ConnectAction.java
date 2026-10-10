@@ -18,7 +18,7 @@ public final class ConnectAction extends AnAction {
         if (apiBase == null || apiBase.isBlank()) return;
         String slug = Messages.showInputDialog(project, "Workspace slug:", "AI Context Hub", null);
         if (slug == null || slug.isBlank()) return;
-        String apiKey = Messages.showPasswordDialog(project, "Workspace API key:", "AI Context Hub");
+        String apiKey = Messages.showPasswordDialog(project, "Workspace API key:", "AI Context Hub", null);
         if (apiKey == null) return;
 
         String repoPath = project.getBasePath();

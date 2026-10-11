@@ -134,4 +134,26 @@ describe('Nordic Editorial UI Components', () => {
       expect(html).toContain('+ New')
     })
   })
+
+  describe('ContinuousContext page', () => {
+    it('renders hero and vector topology schematic', async () => {
+      const { default: ContinuousContext } = await import('./pages/ContinuousContext.jsx')
+      const html = renderToString(<ContinuousContext onNavigateWorkspace={() => {}} />)
+      expect(html).toContain('AI agents shouldn’t wake up with amnesia')
+      expect(html).toContain('Sub-graph Topology')
+      expect(html).toContain('Durable Handoffs')
+      expect(html).toContain('Claude Code')
+      expect(html).toContain('Cursor IDE')
+    })
+  })
+
+  describe('CleanFieldGuide page', () => {
+    it('renders field manual navigation tree and quickstart', async () => {
+      const { default: CleanFieldGuide } = await import('./pages/CleanFieldGuide.jsx')
+      const html = renderToString(<CleanFieldGuide onNavigateWorkspace={() => {}} />)
+      expect(html).toContain('Field Manual v0.9')
+      expect(html).toContain('Zero-Config Multi-Client Quickstart')
+      expect(html).toContain('MCP Specification')
+    })
+  })
 })

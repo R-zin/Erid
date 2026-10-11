@@ -2,12 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useWorkspace } from './useWorkspace.js'
 import { useWorkspaces } from './useWorkspaces.js'
 import { makeClient } from './api.js'
-import Presence from './components/Presence.jsx'
-import TaskList from './components/TaskList.jsx'
-import DecisionList from './components/DecisionList.jsx'
-import HandoffList from './components/HandoffList.jsx'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher.jsx'
-import OAuthLogin from './components/OAuthLogin.jsx'
+import LiveWorkspace from './pages/LiveWorkspace.jsx'
+import ContinuousContext from './pages/ContinuousContext.jsx'
+import CleanFieldGuide from './pages/CleanFieldGuide.jsx'
 
 export default function App() {
   const {
@@ -19,8 +17,8 @@ export default function App() {
     selectWorkspace,
   } = useWorkspaces()
 
-  const [agentFilter, setAgentFilter] = useState('all')
-  const [activeModal, setActiveModal] = useState(null) // 'context' | 'guide' | null
+  // Default page: 'workspace' (can switch to 'continuous-context' | 'field-guide')
+  const [currentPage, setCurrentPage] = useState('workspace')
 
   // OAuth callback capture: after social login the API redirects back to
   // `#/oauth/callback?token=…&slug=…&name=…`. Persist the minted JWT as the
@@ -66,18 +64,13 @@ export default function App() {
 
   const isAuthError = !!error && /authentication failed/i.test(error)
 
-  const openTasksCount = summary?.open_task_count ?? tasks.filter((t) => t.status !== 'done').length
-  const pendingHandoffsCount = summary?.open_handoff_count ?? handoffs.filter((h) => h.status !== 'resolved').length
-  const activeCollabsCount = summary?.active_developers?.length ?? presence.length
-  const decisionsCount = summary?.decision_count ?? decisions.length
-
   return (
     <div className="app-wrapper">
-      {/* Top Header Bar */}
+      {/* Top Header Bar matching Stitch */}
       <header className="top-header">
         <div className="top-header-inner">
           <div className="brand-group">
-            <div className="brand-logo" onClick={() => setActiveModal(null)}>
+            <div className="brand-logo" onClick={() => setCurrentPage('workspace')}>
               erid<span className="brand-dot">.</span>
             </div>
 
@@ -92,28 +85,45 @@ export default function App() {
           <nav className="top-nav">
             <button
               type="button"
-              className={`nav-link ${activeModal === null ? 'active' : ''}`}
-              onClick={() => setActiveModal(null)}
+              className={`nav-link ${currentPage === 'workspace' ? 'active' : ''}`}
+              onClick={() => setCurrentPage('workspace')}
             >
               Live Workspace
             </button>
             <button
               type="button"
-              className={`nav-link ${activeModal === 'context' ? 'active' : ''}`}
-              onClick={() => setActiveModal('context')}
+              className={`nav-link ${currentPage === 'continuous-context' ? 'active' : ''}`}
+              onClick={() => setCurrentPage('continuous-context')}
             >
               Continuous Context
             </button>
             <button
               type="button"
-              className={`nav-link ${activeModal === 'guide' ? 'active' : ''}`}
-              onClick={() => setActiveModal('guide')}
+              className={`nav-link ${currentPage === 'field-guide' ? 'active' : ''}`}
+              onClick={() => setCurrentPage('field-guide')}
             >
-              Field Guide
+              Clean Field Guide
             </button>
+            <a
+              className="nav-link"
+              href="https://github.com/R-zin/Erid"
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub
+            </a>
           </nav>
 
           <div className="header-actions">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => setCurrentPage('workspace')}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', fontSize: 12 }}
+            >
+              <span>Connect Client</span>
+              <span className="material-symbols-outlined" style={{ fontSize: 15 }}>arrow_forward</span>
+            </button>
             <WorkspaceSwitcher
               workspaces={workspaces}
               active={active}
@@ -126,154 +136,37 @@ export default function App() {
         </div>
       </header>
 
-      {/* Subheader / Control Band */}
-      <section className="sub-header-band">
-        <div className="sub-header-inner">
-          <div className="control-left">
-            <div className="switcher-pill">
-              <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--on-surface-variant)', textTransform: 'uppercase' }}>
-                Workspace:
-              </span>
-              <span style={{ fontWeight: 600, color: 'var(--primary)', fontFamily: 'var(--font-sans)' }}>
-                {slug || 'None selected'}
-              </span>
-            </div>
-
-            <div className="kpi-pills-row">
-              <div className="kpi-pill">
-                <span className="pill-dot primary" />
-                <span>{openTasksCount} Open Tasks</span>
-              </div>
-              <div className="kpi-pill accent">
-                <span className="pill-dot accent" style={{ animation: 'pulse-ring 2s infinite' }} />
-                <span>{pendingHandoffsCount} Pending Handoff</span>
-              </div>
-              <div className="kpi-pill">
-                <span className="pill-dot green" />
-                <span>{activeCollabsCount} Active Collaborators</span>
-              </div>
-              <div className="kpi-pill">
-                <span className="pill-dot tint" />
-                <span>{decisionsCount} Decisions</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Agent Filter Toggles */}
-          <div className="filter-pills-row">
-            {[
-              { id: 'all', label: 'All agents' },
-              { id: 'claude', label: 'Claude Code' },
-              { id: 'cursor', label: 'Cursor IDE' },
-              { id: 'codex', label: 'Codex' },
-              { id: 'human', label: 'Human' },
-            ].map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                className={`filter-btn ${agentFilter === f.id ? 'active' : ''}`}
-                onClick={() => setAgentFilter(f.id)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Main Board Stage */}
-      <main className="main-stage">
-        {!slug && (
-          <div className="error-banner" style={{ background: 'var(--surface-container)', color: 'var(--on-surface)', borderColor: 'var(--outline-variant)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span className="material-symbols-outlined" style={{ color: 'var(--secondary-container)' }}>info</span>
-              <strong>No workspace selected</strong>
-            </div>
-            <p style={{ margin: '4px 0 8px', color: 'var(--on-surface-variant)' }}>
-              Add a workspace with <strong>+ New</strong> in the top bar to get started, or sign in with your provider.
-            </p>
-            <OAuthLogin slug={activeSlug || 'default'} />
-          </div>
+      {/* Main Page Content */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        {currentPage === 'workspace' && (
+          <LiveWorkspace
+            slug={slug}
+            summary={summary}
+            tasks={tasks}
+            decisions={decisions}
+            handoffs={handoffs}
+            presence={presence}
+            client={client}
+            credential={credential}
+            error={error}
+            isAuthError={isAuthError}
+            activeSlug={activeSlug}
+            setTasks={setTasks}
+            setDecisions={setDecisions}
+            setHandoffs={setHandoffs}
+          />
         )}
 
-        {error && slug && (
-          <div className="error-banner">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="material-symbols-outlined">warning</span>
-              <strong>Error: {error}</strong>
-            </div>
-            {isAuthError && (
-              <div className="small" style={{ marginTop: 6 }}>
-                Open <strong>Edit</strong> in the workspace selector above to update the credential for this workspace.
-              </div>
-            )}
-          </div>
+        {currentPage === 'continuous-context' && (
+          <ContinuousContext onNavigateWorkspace={() => setCurrentPage('workspace')} />
         )}
 
-        {/* 3-Column Split Board */}
-        <div className="board-grid">
-          {/* Column 1: Active Tasks */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <TaskList
-              tasks={tasks}
-              client={client}
-              canWrite={!!credential}
-              onMutate={setTasks}
-              agentFilter={agentFilter}
-            />
-          </div>
+        {currentPage === 'field-guide' && (
+          <CleanFieldGuide onNavigateWorkspace={() => setCurrentPage('workspace')} />
+        )}
+      </div>
 
-          {/* Column 2: Session Handoffs & Decisions */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <HandoffList
-              handoffs={handoffs}
-              client={client}
-              canWrite={!!credential}
-              tasks={tasks}
-              onMutate={setHandoffs}
-              agentFilter={agentFilter}
-            />
-
-            <DecisionList
-              decisions={decisions}
-              client={client}
-              canWrite={!!credential}
-              tasks={tasks}
-              onMutate={setDecisions}
-              agentFilter={agentFilter}
-            />
-          </div>
-
-          {/* Column 3: Live Presence & Context Footprint */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Presence presence={presence} agentFilter={agentFilter} />
-
-            {/* Context Memory Footprint Box */}
-            <div className="memory-footprint-box">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', color: 'var(--on-surface-variant)', letterSpacing: '0.04em' }}>
-                  Context Footprint
-                </span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--primary)', fontWeight: 600 }}>
-                  {slug ? `${tasks.length + decisions.length + handoffs.length} state items` : 'idle'}
-                </span>
-              </div>
-              <div className="memory-bar-track">
-                <div
-                  className="memory-bar-fill"
-                  style={{ width: slug ? `${Math.min(100, Math.max(15, (tasks.length + decisions.length) * 10))}%` : '5%' }}
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--on-surface-variant)', fontFamily: 'var(--font-mono)' }}>
-                <span>Sync: WebSocket feed</span>
-                <span>Eviction: LRU-window</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </main>
-
-      {/* RPC Stream Ticker (Bottom Edge) */}
+      {/* Pinned Real-Time RPC Stream Ticker (Bottom Edge) */}
       <footer className="rpc-stream-footer">
         <div className="rpc-pill">
           <span className={`pulse-indicator ${connected ? 'live' : 'offline'}`} style={{ width: 6, height: 6 }}>
@@ -315,56 +208,6 @@ export default function App() {
           )}
         </div>
       </footer>
-
-      {/* Modals for Field Guide & Continuous Context */}
-      {activeModal && (
-        <div className="modal-overlay" onClick={() => setActiveModal(null)}>
-          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontSize: 22, color: 'var(--primary)' }}>
-                {activeModal === 'context' ? 'Erid: Continuous Context' : 'The Clean Field Guide'}
-              </h2>
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => setActiveModal(null)}
-                style={{ padding: '4px 8px' }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {activeModal === 'context' ? (
-              <div style={{ lineHeight: 1.6, color: 'var(--on-surface-variant)' }}>
-                <p>
-                  <strong>Claude Code, Cursor, and Codex CLI</strong> all read from and write to the same project state — tasks, decisions, and who's-working-on-what — instead of every session starting from zero.
-                </p>
-                <div style={{ background: 'var(--surface-container)', padding: 14, borderRadius: 6, margin: '12px 0' }}>
-                  <h4 style={{ margin: '0 0 6px 0', color: 'var(--primary)', fontFamily: 'var(--font-serif)' }}>Core Principles</h4>
-                  <ul style={{ margin: 0, paddingLeft: 20 }}>
-                    <li><strong>Continuity:</strong> New sessions call <code>workspace_summary</code> and catch up immediately.</li>
-                    <li><strong>No Duplicate Work:</strong> <code>search_context</code> surfaces past decisions before re-deciding them.</li>
-                    <li><strong>Coordination:</strong> <code>update_presence</code> broadcasts active files so agents don't collide.</li>
-                  </ul>
-                </div>
-              </div>
-            ) : (
-              <div style={{ lineHeight: 1.6, color: 'var(--on-surface-variant)' }}>
-                <p>
-                  Quick reference for connecting your editor tools to this active hub:
-                </p>
-                <div style={{ background: 'var(--surface-container)', padding: 12, borderRadius: 6, fontFamily: 'var(--font-mono)', fontSize: 12, margin: '12px 0' }}>
-                  <div># Connect Claude Code plugin:</div>
-                  <div style={{ color: 'var(--primary)', fontWeight: 600 }}>claude plugin add editors/claude-code</div>
-                  <br />
-                  <div># Inspect API health:</div>
-                  <div style={{ color: 'var(--primary)', fontWeight: 600 }}>curl http://localhost:8000/health</div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

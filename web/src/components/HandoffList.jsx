@@ -1,13 +1,20 @@
 import React, { useState } from 'react'
 import HandoffCreateForm from './HandoffCreateForm.jsx'
 
-// Session handoffs: what each session left behind for the next one. Lifecycle
-// actions (pick up / resolve / delete) are optimistic with rollback on failure,
-// mirroring the decision/task lists.
-export default function HandoffList({ handoffs, client, canWrite, tasks = [], onMutate }) {
+export default function HandoffList({ handoffs, client, canWrite, tasks = [], onMutate, agentFilter = 'all' }) {
   const [createError, setCreateError] = useState(null)
   const [rowError, setRowError] = useState(null)
   const taskTitle = (id) => (id ? tasks.find((t) => t.id === id)?.title : null)
+
+  const filtered = handoffs.filter((h) => {
+    if (agentFilter === 'all') return true
+    if (!h.created_by) return false
+    if (agentFilter === 'human') return !/(claude|cursor|codex|agent)/i.test(h.created_by)
+    if (agentFilter === 'claude') return /claude/i.test(h.created_by)
+    if (agentFilter === 'cursor') return /cursor/i.test(h.created_by)
+    if (agentFilter === 'codex') return /codex/i.test(h.created_by)
+    return true
+  })
 
   const addOptimistic = (handoff) => {
     setCreateError(null)
@@ -15,7 +22,6 @@ export default function HandoffList({ handoffs, client, canWrite, tasks = [], on
   }
   const rollback = (tempId) => onMutate?.((prev) => prev.filter((h) => h.id !== tempId))
 
-  // Apply a lifecycle action optimistically; restore the original on failure.
   const act = async (handoff, patch, call) => {
     setRowError(null)
     onMutate?.((prev) => prev.map((h) => (h.id === handoff.id ? { ...handoff, ...patch } : h)))
@@ -33,10 +39,12 @@ export default function HandoffList({ handoffs, client, canWrite, tasks = [], on
       { status: 'acknowledged', acknowledged_at: new Date().toISOString() },
       () => client.acknowledgeHandoff(handoff.id),
     )
+
   const resolve = (handoff) =>
     act(handoff, { status: 'resolved', resolved_at: new Date().toISOString() }, () =>
       client.resolveHandoff(handoff.id),
     )
+
   const remove = (handoff) => {
     setRowError(null)
     onMutate?.((prev) => prev.filter((h) => h.id !== handoff.id))
@@ -52,66 +60,149 @@ export default function HandoffList({ handoffs, client, canWrite, tasks = [], on
       })
   }
 
+  const pendingCount = handoffs.filter((h) => h.status !== 'resolved').length
+
   return (
-    <section className="card">
-      <h2>Session handoffs</h2>
+    <div className="card-panel">
+      <div className="card-header">
+        <div className="card-title-group">
+          <span className="material-symbols-outlined" style={{ fontSize: 20, color: 'var(--secondary-container)' }}>
+            swap_horiz
+          </span>
+          <h3 className="card-title">Session Handoffs</h3>
+          {pendingCount > 0 && (
+            <span className="action-required-badge">
+              {pendingCount} Pending
+            </span>
+          )}
+        </div>
+        <span className="material-symbols-outlined muted" style={{ fontSize: 18 }}>
+          history_toggle_off
+        </span>
+      </div>
 
-      {onMutate && (
-        <HandoffCreateForm
-          client={client}
-          disabled={!client}
-          tasks={tasks}
-          onOptimistic={addOptimistic}
-          onRollback={rollback}
-          onError={setCreateError}
-        />
-      )}
-      {createError && <div className="error inline">{createError}</div>}
-      {!canWrite && client && (
-        <p className="muted small hint">Read-only credential — creating handoffs may be rejected by the server.</p>
-      )}
+      <div className="card-body" style={{ paddingBottom: 8 }}>
+        {onMutate && (
+          <HandoffCreateForm
+            client={client}
+            disabled={!client}
+            tasks={tasks}
+            onOptimistic={addOptimistic}
+            onRollback={rollback}
+            onError={setCreateError}
+          />
+        )}
+        {createError && <div className="error-banner inline">{createError}</div>}
+        {!canWrite && client && (
+          <p className="muted small" style={{ margin: '4px 0 10px' }}>
+            Read-only credential — creating handoffs may be rejected by the server.
+          </p>
+        )}
+        {rowError && <div className="error-banner inline">{rowError}</div>}
+      </div>
 
-      {rowError && <div className="error inline">{rowError}</div>}
-      {handoffs.length === 0 && <p className="empty">No handoffs yet — leave one when you wrap up a session.</p>}
-      <ul>
-        {handoffs.map((h) => (
-          <li key={h.id} className={`handoff${h.__optimistic ? ' optimistic' : ''}`}>
-            <div className="decision-title">
-              <span className={`handoff-status ${h.status}`}>{h.status}</span> {h.summary}
-              {canWrite && client && !h.__optimistic && (
-                <span className="row-actions">
-                  {h.status === 'open' && (
-                    <button type="button" className="ghost row-action" onClick={() => pickUp(h)}>
-                      pick up
-                    </button>
+      {filtered.length === 0 ? (
+        <div className="empty-placeholder" style={{ padding: '24px 16px' }}>
+          No session handoffs yet. Leave one when you wrap up an agent session.
+        </div>
+      ) : (
+        <ul className="stream-list">
+          {filtered.map((h) => {
+            const isOpen = h.status === 'open'
+            return (
+              <li
+                key={h.id}
+                className={`stream-item${h.__optimistic ? ' optimistic' : ''}`}
+                style={{
+                  background: isOpen ? 'rgba(253, 106, 73, 0.04)' : undefined,
+                  borderLeft: isOpen ? '3px solid var(--secondary-container)' : undefined,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span className={`badge ${h.status}`}>{h.status}</span>
+                    {h.created_by && (
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--primary)', fontWeight: 600 }}>
+                        {h.created_by}
+                      </span>
+                    )}
+                  </div>
+                  <span className="small muted">
+                    {new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+
+                <p style={{ margin: '0 0 6px 0', fontSize: 14, fontWeight: 500, color: 'var(--on-surface)' }}>
+                  {h.summary}
+                </p>
+
+                {h.next_action && (
+                  <div style={{ background: 'var(--surface)', padding: '6px 10px', borderRadius: 4, border: 'var(--border-hairline)', fontSize: 12, margin: '6px 0' }}>
+                    <span style={{ color: 'var(--secondary)', fontWeight: 600 }}>Next action: </span>
+                    {h.next_action}
+                  </div>
+                )}
+
+                {h.blockers && (
+                  <div style={{ color: 'var(--error)', fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>warning</span>
+                    {h.blockers}
+                  </div>
+                )}
+
+                <div className="task-bottom-meta" style={{ marginTop: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {h.branch && (
+                      <span className="agent-tag">
+                        ⎇ {h.branch}
+                      </span>
+                    )}
+                    {taskTitle(h.task_id) && (
+                      <span className="agent-tag">
+                        ↳ {taskTitle(h.task_id)}
+                      </span>
+                    )}
+                  </div>
+
+                  {canWrite && client && !h.__optimistic && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {h.status === 'open' && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => pickUp(h)}
+                          style={{ padding: '3px 8px', fontSize: 11, borderColor: 'var(--secondary-container)', color: 'var(--secondary)' }}
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+                      {h.status !== 'resolved' && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => resolve(h)}
+                          style={{ padding: '3px 8px', fontSize: 11, background: 'var(--primary-container)', color: 'var(--on-primary)' }}
+                        >
+                          Resolve
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="ghost danger"
+                        aria-label={`Delete handoff: ${h.summary}`}
+                        onClick={() => remove(h)}
+                        style={{ padding: '3px 6px', fontSize: 11 }}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   )}
-                  {h.status !== 'resolved' && (
-                    <button type="button" className="ghost row-action" onClick={() => resolve(h)}>
-                      resolve
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="ghost danger row-action"
-                    aria-label={`Delete handoff: ${h.summary}`}
-                    onClick={() => remove(h)}
-                  >
-                    ✕
-                  </button>
-                </span>
-              )}
-            </div>
-            {h.next_action && <div className="small">▸ next: {h.next_action}</div>}
-            {h.blockers && <div className="muted small">⚠ {h.blockers}</div>}
-            <div className="muted small">
-              {h.created_by && <span>by {h.created_by} · </span>}
-              {h.branch && <span>⎇ {h.branch} · </span>}
-              {taskTitle(h.task_id) && <span>↳ {taskTitle(h.task_id)} · </span>}
-              {new Date(h.created_at).toLocaleString()}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
   )
 }

@@ -11,6 +11,7 @@ export function useWorkspace(slug, credential, authType) {
   const [decisions, setDecisions] = useState([])
   const [handoffs, setHandoffs] = useState([])
   const [presence, setPresence] = useState([])
+  const [lastEvent, setLastEvent] = useState(null)
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState(null)
   const wsRef = useRef(null)
@@ -39,6 +40,7 @@ export function useWorkspace(slug, credential, authType) {
       setDecisions([])
       setHandoffs([])
       setPresence([])
+      setLastEvent(null)
       setError(null)
       return
     }
@@ -82,6 +84,7 @@ export function useWorkspace(slug, credential, authType) {
           return // malformed frame: drop, keep streaming
         }
         if (event.type === 'ping') return // keepalive
+        setLastEvent({ type: event.type, data: event.data, ts: Date.now() })
         if (event.type === 'workspace_deleted') {
           setError(`Workspace '${slug}' was deleted.`)
           ws.close() // deliberate; onclose sees wsRef.current !== ws → no reconnect
@@ -128,6 +131,7 @@ export function useWorkspace(slug, credential, authType) {
     decisions,
     handoffs,
     presence,
+    lastEvent,
     connected,
     error,
     reload: load,

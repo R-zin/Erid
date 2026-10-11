@@ -209,11 +209,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run unit tests
+      - name: Run unit & component tests
         run: npm test
 
       - name: Build web SPA
         run: npm run build
+
+      - name: Verify production build bundle
+        run: |
+          test -f dist/index.html
+          test -d dist/assets
+          echo "Verified dist/index.html and dist/assets"
 
   vscode:
     name: vscode-extension

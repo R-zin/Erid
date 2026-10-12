@@ -379,14 +379,20 @@ jobs:
             | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['task_count'] >= 1; assert d['open_handoff_count'] >= 1"
 
           echo "10. Probing WebSocket upgrade on Web reverse proxy..."
-          HTTP_UPGRADE=$(curl -i -N -s \
-            -H "Connection: Upgrade" \
-            -H "Upgrade: websocket" \
-            -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-            -H "Sec-WebSocket-Version: 13" \
-            "http://localhost:8080/api/workspaces/$SLUG/ws?api_key=$KEY" | head -n 1)
-          echo "WebSocket upgrade response: $HTTP_UPGRADE"
-          echo "$HTTP_UPGRADE" | grep -E "101|Switching Protocols"
+          python3 -c "
+          import http.client
+          conn = http.client.HTTPConnection('localhost', 8080)
+          conn.request('GET', '/api/workspaces/$SLUG/ws?api_key=$KEY', headers={
+              'Upgrade': 'websocket',
+              'Connection': 'Upgrade',
+              'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+              'Sec-WebSocket-Version': '13',
+          })
+          resp = conn.getresponse()
+          print('WebSocket upgrade response:', resp.status, resp.reason)
+          assert resp.status == 101, f'Expected 101 Switching Protocols, got {resp.status}'
+          conn.close()
+          "
 
       - name: Dump Compose logs on failure
         if: failure()

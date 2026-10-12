@@ -62,6 +62,18 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web SPA bundle for integrated tests
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+
       - name: Verify dependency lockfile
         run: uv sync --frozen
 
@@ -169,7 +181,15 @@ jobs:
           curl -sf "http://127.0.0.1:8000/api/workspaces/ci/search?q=smoke" \
             -H "X-API-Key: $KEY"
 
-          echo "7. Verifying workspace summary..."
+          echo "7. Broadcasting and testing presence..."
+          curl -sf -XPOST http://127.0.0.1:8000/api/workspaces/ci/presence \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            -d '{"actor_name":"ci-bot","actor_type":"human","current_task":"pipeline smoke"}'
+          curl -sf http://127.0.0.1:8000/api/workspaces/ci/presence \
+            -H "X-API-Key: $KEY" \
+            | uv run python -c 'import sys,json; p=json.load(sys.stdin); assert any(x["actor_name"]=="ci-bot" for x in p)'
+
+          echo "8. Verifying workspace summary..."
           curl -sf http://127.0.0.1:8000/api/workspaces/ci/summary \
             -H "X-API-Key: $KEY" \
             | uv run python -c 'import sys,json; d=json.load(sys.stdin); assert d["task_count"] >= 1; assert d["open_handoff_count"] == 0'
@@ -209,11 +229,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run unit tests
+      - name: Run unit & component tests
         run: npm test
 
       - name: Build web SPA
         run: npm run build
+
+      - name: Verify production build bundle
+        run: |
+          test -f dist/index.html
+          test -d dist/assets
+          echo "Verified dist/index.html and dist/assets"
 
   vscode:
     name: vscode-extension
@@ -305,33 +331,68 @@ jobs:
           docker compose logs --tail 100 web
           exit 1
 
-      - name: Full stack E2E REST smoke
+      - name: Full stack E2E integration smoke (SPA + Reverse Proxy REST + WS)
         run: |
           set -euo pipefail
           SLUG="e2e-compose-$GITHUB_RUN_ID"
 
-          echo "1. Provisioning workspace..."
-          KEY=$(curl -sf -XPOST "http://localhost:8000/api/workspaces?slug=$SLUG" \
+          echo "1. Verifying Web frontend serves Nordic Editorial SPA..."
+          curl -sf http://localhost:8080/ | grep -i "erid"
+          curl -sf http://localhost:8080/continuous-context | grep -i "erid"
+
+          echo "2. Provisioning workspace via Web reverse proxy..."
+          KEY=$(curl -sf -XPOST "http://localhost:8080/api/workspaces?slug=$SLUG" \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['api_key'])")
 
-          echo "2. Checking workspace in directory..."
-          curl -sf http://localhost:8000/api/workspaces \
+          echo "3. Checking workspace listed via Web reverse proxy..."
+          curl -sf http://localhost:8080/api/workspaces \
             | python3 -c "import sys,json; slugs=[w['slug'] for w in json.load(sys.stdin)]; assert '$SLUG' in slugs, f'workspace not listed: {slugs}'"
 
-          echo "3. Creating task..."
-          TASK_ID=$(curl -sf -XPOST "http://localhost:8000/api/workspaces/$SLUG/tasks" \
+          echo "4. Creating task via Web reverse proxy..."
+          TASK_ID=$(curl -sf -XPOST "http://localhost:8080/api/workspaces/$SLUG/tasks" \
             -H "X-API-Key: $KEY" -H 'Content-Type: application/json' -d '{"title":"compose e2e task"}' \
             | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 
-          echo "4. Creating handoff..."
-          curl -sf -XPOST "http://localhost:8000/api/workspaces/$SLUG/handoffs" \
+          echo "5. Creating decision via Web reverse proxy..."
+          curl -sf -XPOST "http://localhost:8080/api/workspaces/$SLUG/decisions" \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            -d '{"title":"compose e2e decision","reason":"verify frontend-backend proxy","task_id":"'"$TASK_ID"'"}'
+
+          echo "6. Creating session handoff via Web reverse proxy..."
+          curl -sf -XPOST "http://localhost:8080/api/workspaces/$SLUG/handoffs" \
             -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
             -d '{"summary":"compose e2e handoff","task_id":"'"$TASK_ID"'","next_action":"verify"}'
 
-          echo "5. Verifying workspace summary..."
-          curl -sf "http://localhost:8000/api/workspaces/$SLUG/summary" \
+          echo "7. Broadcasting presence via Web reverse proxy..."
+          curl -sf -XPOST "http://localhost:8080/api/workspaces/$SLUG/presence" \
+            -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+            -d '{"actor_name":"compose-e2e-agent","actor_type":"human","current_task":"full stack verification"}'
+
+          echo "8. Searching context via Web reverse proxy..."
+          curl -sf "http://localhost:8080/api/workspaces/$SLUG/search?q=compose" \
+            -H "X-API-Key: $KEY" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['tasks']) >= 1 or len(d['decisions']) >= 1"
+
+          echo "9. Verifying workspace summary via Web reverse proxy..."
+          curl -sf "http://localhost:8080/api/workspaces/$SLUG/summary" \
             -H "X-API-Key: $KEY" \
             | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['task_count'] >= 1; assert d['open_handoff_count'] >= 1"
+
+          echo "10. Probing WebSocket upgrade on Web reverse proxy..."
+          python3 -c "
+          import http.client
+          conn = http.client.HTTPConnection('localhost', 8080)
+          conn.request('GET', '/api/workspaces/$SLUG/ws?api_key=$KEY', headers={
+              'Upgrade': 'websocket',
+              'Connection': 'Upgrade',
+              'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+              'Sec-WebSocket-Version': '13',
+          })
+          resp = conn.getresponse()
+          print('WebSocket upgrade response:', resp.status, resp.reason)
+          assert resp.status == 101, f'Expected 101 Switching Protocols, got {resp.status}'
+          conn.close()
+          "
 
       - name: Dump Compose logs on failure
         if: failure()

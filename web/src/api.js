@@ -51,9 +51,11 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
     decisions: () => get('/decisions'),
     handoffs: () => get('/handoffs'),
     presence: () => get('/presence'),
+    search: (q, limit = 20) => get(`/search?q=${encodeURIComponent(q)}&limit=${limit}`),
     createTask: (task) => post('/tasks', task),
     createDecision: (decision) => post('/decisions', decision),
     createHandoff: (handoff) => post('/handoffs', handoff),
+    updatePresence: (presence) => post('/presence', presence),
     acknowledgeHandoff: (id) => post(`/handoffs/${id}/acknowledge`),
     resolveHandoff: (id) => post(`/handoffs/${id}/resolve`),
     updateTask: (id, patch) => put(`/tasks/${id}`, patch),
@@ -71,6 +73,39 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
       }
       return `${proto}://${host}${root}/ws${q}`
     },
+  }
+}
+
+// Provision a new workspace on the server (POST /api/workspaces?slug=...).
+// Returns { slug, name, api_key, created_at }. If workspace exists, api_key is null.
+export async function provisionWorkspace(slug, { base = '' } = {}) {
+  const r = await fetch(`${base}/api/workspaces?slug=${encodeURIComponent(slug)}`, {
+    method: 'POST',
+  })
+  if (!r.ok) throw new ApiError(r.status, r.statusText)
+  return r.json()
+}
+
+// Delete an entire workspace on the server (DELETE /api/workspaces/{slug}, owner only).
+export async function deleteWorkspace(slug, credential, { authType = 'key', base = '' } = {}) {
+  const headers = authHeader(credential, authType)
+  const r = await fetch(`${base}/api/workspaces/${encodeURIComponent(slug)}`, {
+    method: 'DELETE',
+    headers,
+  })
+  if (!r.ok) throw new ApiError(r.status, r.statusText)
+  return true
+}
+
+// List full workspace objects from GET /api/workspaces.
+export async function listWorkspacesDetailed({ base = '' } = {}) {
+  try {
+    const r = await fetch(`${base}/api/workspaces`)
+    if (!r.ok) return []
+    const data = await r.json()
+    return Array.isArray(data) ? data : data?.workspaces || []
+  } catch {
+    return []
   }
 }
 
@@ -93,3 +128,4 @@ export async function listWorkspaces({ base = '' } = {}) {
     return []
   }
 }
+

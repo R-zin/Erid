@@ -20,12 +20,19 @@ def _database_url_default() -> str:
 
 
 def _cors_origins_default() -> list[str]:
-    # Comma-separated in CORS_ORIGINS; the local dashboard (:5173) + API by
-    # default. A wildcard ("*") must never be paired with allow_credentials=True
-    # (invalid per the CORS spec), so enumerate the dashboard origins instead.
+    # Comma-separated in CORS_ORIGINS; the local dashboard (:5173), compose web
+    # (:8080), and API (:8000) origins. A wildcard ("*") must never be paired with
+    # allow_credentials=True (invalid per the CORS spec), so enumerate the dashboard origins.
     raw = os.getenv("CORS_ORIGINS")
     if raw is None:
-        return ["http://localhost:5173", "http://localhost:8000"]
+        return [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+        ]
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
@@ -91,6 +98,9 @@ class Settings:
     # separated in CORS_ORIGINS. Never "*" — credentials are disallowed, so a
     # wildcard would conflict; enumerate the dashboard origins explicitly.
     cors_origins: list[str] = field(default_factory=lambda: _cors_origins_default())
+    # Directory path to built frontend SPA assets (web/dist). When present, FastAPI
+    # serves the web dashboard alongside the REST/WS API routes.
+    frontend_dist_dir: str = field(default_factory=lambda: os.getenv("FRONTEND_DIST_DIR", ""))
 
 
 settings = Settings()

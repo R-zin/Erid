@@ -62,4 +62,52 @@ describe('makeClient request semantics', () => {
     await makeClient({ slug: 'ws', credential: 'jwt', authType: 'token' }).tasks()
     expect(tokCalls[0].options.headers.Authorization).toBe('Bearer jwt')
   })
+
+  it('search sends query param and limit', async () => {
+    const calls = stubFetch(new Response('{"query":"auth","tasks":[],"decisions":[]}', { status: 200 }))
+    const client = makeClient({ slug: 'ws', credential: 'k' })
+    const res = await client.search('auth', 10)
+    expect(calls[0].url).toBe('/api/workspaces/ws/search?q=auth&limit=10')
+    expect(res.query).toBe('auth')
+  })
+
+  it('updatePresence posts presence heartbeat payload', async () => {
+    const payload = { actor_name: 'dev', actor_type: 'human', current_task: 'debugging' }
+    const calls = stubFetch(new Response(JSON.stringify(payload), { status: 200 }))
+    const client = makeClient({ slug: 'ws', credential: 'k' })
+    await client.updatePresence(payload)
+    expect(calls[0].url).toBe('/api/workspaces/ws/presence')
+    expect(calls[0].options.method).toBe('POST')
+    expect(JSON.parse(calls[0].options.body)).toEqual(payload)
+  })
 })
+
+describe('top-level workspace management API', () => {
+  it('provisionWorkspace sends POST /api/workspaces?slug=...', async () => {
+    const calls = stubFetch(new Response('{"slug":"new-ws","api_key":"key-123"}', { status: 201 }))
+    const { provisionWorkspace } = await import('./api.js')
+    const res = await provisionWorkspace('new-ws')
+    expect(calls[0].url).toBe('/api/workspaces?slug=new-ws')
+    expect(calls[0].options.method).toBe('POST')
+    expect(res.api_key).toBe('key-123')
+  })
+
+  it('deleteWorkspace sends DELETE /api/workspaces/{slug} with auth header', async () => {
+    const calls = stubFetch(new Response(null, { status: 204 }))
+    const { deleteWorkspace } = await import('./api.js')
+    const ok = await deleteWorkspace('old-ws', 'secret-key', { authType: 'key' })
+    expect(ok).toBe(true)
+    expect(calls[0].url).toBe('/api/workspaces/old-ws')
+    expect(calls[0].options.method).toBe('DELETE')
+    expect(calls[0].options.headers['X-API-Key']).toBe('secret-key')
+  })
+
+  it('listWorkspacesDetailed returns full array of workspace objects', async () => {
+    const mockList = [{ slug: 'w1', name: 'w1', is_secured: true }]
+    stubFetch(new Response(JSON.stringify(mockList), { status: 200 }))
+    const { listWorkspacesDetailed } = await import('./api.js')
+    const res = await listWorkspacesDetailed()
+    expect(res).toEqual(mockList)
+  })
+})
+

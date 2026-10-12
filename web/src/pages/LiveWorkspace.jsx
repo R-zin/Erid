@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import Presence from '../components/Presence.jsx'
 import TaskList from '../components/TaskList.jsx'
 import DecisionList from '../components/DecisionList.jsx'
@@ -22,6 +22,50 @@ export default function LiveWorkspace({
   setHandoffs,
 }) {
   const [agentFilter, setAgentFilter] = useState('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState(null)
+  const [isSearching, setIsSearching] = useState(false)
+  const [searchError, setSearchError] = useState(null)
+
+  // Debounced search query against backend API /search endpoint
+  useEffect(() => {
+    const q = searchQuery.trim()
+    if (!q) {
+      setSearchResults(null)
+      setIsSearching(false)
+      setSearchError(null)
+      return
+    }
+
+    setIsSearching(true)
+    setSearchError(null)
+
+    const timer = setTimeout(async () => {
+      try {
+        if (client) {
+          const res = await client.search(q, 20)
+          setSearchResults(res)
+        } else {
+          const lower = q.toLowerCase()
+          setSearchResults({
+            query: q,
+            tasks: tasks.filter((t) => t.title.toLowerCase().includes(lower)),
+            decisions: decisions.filter(
+              (d) =>
+                d.title.toLowerCase().includes(lower) ||
+                (d.reason && d.reason.toLowerCase().includes(lower)),
+            ),
+          })
+        }
+      } catch (err) {
+        setSearchError(err.message || 'Search failed')
+      } finally {
+        setIsSearching(false)
+      }
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [searchQuery, client, tasks, decisions])
 
   const openTasksCount = summary?.open_task_count ?? tasks.filter((t) => t.status !== 'done').length
   const pendingHandoffsCount = summary?.open_handoff_count ?? handoffs.filter((h) => h.status !== 'resolved').length
@@ -85,6 +129,43 @@ export default function LiveWorkspace({
         </div>
       </section>
 
+      {/* Context Search Band */}
+      <div className="search-bar-strip">
+        <div className="search-bar-strip-inner">
+          <div className="search-input-group">
+            <span className="material-symbols-outlined search-icon">search</span>
+            <input
+              type="text"
+              className="context-search-input"
+              placeholder={slug ? `Search context in ${slug} (tasks, decisions, rationale)…` : 'Select a workspace to search…'}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="search context"
+              disabled={!slug}
+            />
+            {isSearching && <span className="search-status-tag">Searching…</span>}
+            {searchQuery && (
+              <button
+                type="button"
+                className="ghost search-clear-btn"
+                onClick={() => {
+                  setSearchQuery('')
+                  setSearchResults(null)
+                }}
+                aria-label="clear search"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {searchQuery && searchResults && (
+            <div className="search-results-summary">
+              <span>{searchResults.tasks?.length || 0} tasks • {searchResults.decisions?.length || 0} decisions</span>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Main Board Stage */}
       <main className="main-stage">
         {!slug && (
@@ -111,6 +192,65 @@ export default function LiveWorkspace({
                 Open <strong>Edit</strong> in the workspace selector above to update the credential for this workspace.
               </div>
             )}
+          </div>
+        )}
+
+        {/* Search Results Panel */}
+        {searchQuery.trim() && searchResults && (
+          <div className="search-results-card">
+            <div className="search-results-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 18, color: 'var(--primary)' }}>saved_search</span>
+                <span style={{ fontWeight: 600, fontFamily: 'var(--font-serif)', fontSize: 16 }}>
+                  Search Results for &ldquo;{searchQuery}&rdquo;
+                </span>
+              </div>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => {
+                  setSearchQuery('')
+                  setSearchResults(null)
+                }}
+                style={{ fontSize: 11 }}
+              >
+                Dismiss
+              </button>
+            </div>
+            <div className="search-results-body">
+              {searchResults.tasks?.length === 0 && searchResults.decisions?.length === 0 ? (
+                <div className="empty-placeholder">No tasks or decisions matched &ldquo;{searchQuery}&rdquo;</div>
+              ) : (
+                <div className="search-results-grid">
+                  {searchResults.tasks?.length > 0 && (
+                    <div className="search-col">
+                      <div className="search-col-title">Tasks ({searchResults.tasks.length})</div>
+                      <ul className="search-item-list">
+                        {searchResults.tasks.map((t) => (
+                          <li key={t.id} className="search-item">
+                            <span className={`badge ${t.status}`} style={{ fontSize: 10, padding: '1px 6px' }}>{t.status}</span>
+                            <span style={{ fontWeight: 500, fontSize: 13 }}>{t.title}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {searchResults.decisions?.length > 0 && (
+                    <div className="search-col">
+                      <div className="search-col-title">Decisions ({searchResults.decisions.length})</div>
+                      <ul className="search-item-list">
+                        {searchResults.decisions.map((d) => (
+                          <li key={d.id} className="search-item">
+                            <span style={{ fontWeight: 500, fontSize: 13 }}>{d.title}</span>
+                            {d.reason && <p style={{ fontSize: 12, color: 'var(--on-surface-variant)', margin: '2px 0 0' }}>{d.reason}</p>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -150,7 +290,7 @@ export default function LiveWorkspace({
 
           {/* Column 3: Live Presence & Context Footprint */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Presence presence={presence} agentFilter={agentFilter} />
+            <Presence presence={presence} agentFilter={agentFilter} client={client} canWrite={!!credential} />
 
             {/* Context Memory Footprint Box */}
             <div className="memory-footprint-box">

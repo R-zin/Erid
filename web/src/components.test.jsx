@@ -51,6 +51,11 @@ describe('Nordic Editorial UI Components', () => {
       expect(html).toContain('Claude-3.7')
       expect(html).not.toContain('Razin M')
     })
+
+    it('renders check in action when client and write credentials exist', () => {
+      const html = renderToString(<Presence presence={[]} client={{}} canWrite={true} />)
+      expect(html).toContain('Check In')
+    })
   })
 
   describe('TaskList component', () => {
@@ -147,13 +152,34 @@ describe('Nordic Editorial UI Components', () => {
     })
   })
 
-  describe('CleanFieldGuide page', () => {
-    it('renders field manual navigation tree and quickstart', async () => {
-      const { default: CleanFieldGuide } = await import('./pages/CleanFieldGuide.jsx')
-      const html = renderToString(<CleanFieldGuide onNavigateWorkspace={() => {}} />)
-      expect(html).toContain('Field Manual v0.9')
-      expect(html).toContain('Zero-Config Multi-Client Quickstart')
-      expect(html).toContain('MCP Specification')
+  describe('LiveWorkspace page', () => {
+    it('renders control band, search bar, and active columns', async () => {
+      const { default: LiveWorkspace } = await import('./pages/LiveWorkspace.jsx')
+      const html = renderToString(
+        <LiveWorkspace
+          slug="test-hub"
+          summary={{ open_task_count: 2, open_handoff_count: 1, active_developers: ['alice'], decision_count: 3 }}
+          tasks={[{ id: 't1', title: 'Task 1', status: 'in_progress' }]}
+          decisions={[{ id: 'd1', title: 'Decision 1', reason: 'speed' }]}
+          handoffs={[{ id: 'h1', summary: 'Handoff 1', status: 'open' }]}
+          presence={[{ id: 'p1', actor_name: 'alice', actor_type: 'human', last_seen: new Date().toISOString() }]}
+          client={{}}
+          credential="key-1"
+          error={null}
+          isAuthError={false}
+          activeSlug="test-hub"
+          setTasks={() => {}}
+          setDecisions={() => {}}
+          setHandoffs={() => {}}
+        />
+      )
+      expect(html).toContain('test-hub')
+      expect(html).toContain('Search context in test-hub')
+      expect(html).toContain('Open Tasks')
+      expect(html).toContain('Pending Handoff')
+      expect(html).toContain('Task 1')
+      expect(html).toContain('Decision 1')
     })
   })
 })
+

@@ -1004,3 +1004,129 @@ button.small-toggle:hover {
     overflow-x: auto;
   }
 }
+
+/* Context Search Strip */
+.search-bar-strip {
+  background: var(--surface-low);
+  border-bottom: var(--border-hairline);
+  padding: 8px 24px;
+}
+
+.search-bar-strip-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.search-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-container);
+  border: var(--border-hairline);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  flex: 1;
+  max-width: 600px;
+}
+
+.search-input-group:focus-within {
+  border-color: var(--primary);
+}
+
+.search-icon {
+  font-size: 18px;
+  color: var(--on-surface-variant);
+}
+
+.context-search-input {
+  border: none !important;
+  background: transparent !important;
+  padding: 2px 4px !important;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--on-surface);
+  flex: 1;
+  outline: none;
+}
+
+.search-status-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--secondary);
+}
+
+.search-clear-btn {
+  border: none !important;
+  padding: 0 4px !important;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--on-surface-variant);
+}
+
+.search-results-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--on-surface-variant);
+}
+
+/* Search Results Panel */
+.search-results-card {
+  background: var(--surface-container);
+  border: var(--border-hairline);
+  border-radius: var(--radius-sm);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.search-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--surface-container-high);
+  border-bottom: var(--border-hairline);
+}
+
+.search-results-body {
+  padding: 14px 16px;
+}
+
+.search-results-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.search-col-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--on-surface-variant);
+  margin-bottom: 8px;
+}
+
+.search-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-item {
+  padding: 8px 10px;
+  background: var(--surface-low);
+  border: var(--border-hairline);
+  border-radius: var(--radius-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+

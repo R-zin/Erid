@@ -80,9 +80,10 @@ def get_frontend_dist() -> Path | None:
 async def serve_assets(asset_path: str):
     dist = get_frontend_dist()
     if dist:
-        file = dist / "assets" / asset_path
-        if file.is_file():
-            return FileResponse(file)
+        assets_dir = (dist / "assets").resolve()
+        target = (assets_dir / asset_path).resolve()
+        if target.is_relative_to(assets_dir) and target.is_file():
+            return FileResponse(target)
     raise HTTPException(status_code=404, detail="Asset Not Found")
 
 
@@ -94,9 +95,15 @@ async def serve_spa(full_path: str):
 
     dist = get_frontend_dist()
     if dist and (dist / "index.html").is_file():
-        target = dist / full_path
-        if full_path and target.is_file():
-            return FileResponse(target)
+        dist_resolved = dist.resolve()
+        if full_path:
+            target = (dist / full_path).resolve()
+            if target.is_relative_to(dist_resolved):
+                if target.is_file():
+                    return FileResponse(target)
+            else:
+                # Path traversal attempt outside dist
+                raise HTTPException(status_code=404, detail="Not Found")
         return FileResponse(dist / "index.html")
 
     if not full_path:

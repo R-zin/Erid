@@ -75,6 +75,18 @@ async def test_serve_frontend_static_assets(client: AsyncClient, ensure_frontend
     assert r_missing.status_code == 404
     assert r_missing.json() == {"detail": "Asset Not Found"}
 
+    # Path traversal attempts in /assets must return 404 and not serve files outside dist/assets
+    r_traversal = await client.get("/assets/%2e%2e/%2e%2e/pyproject.toml")
+    assert r_traversal.status_code == 404
+    assert r_traversal.json() == {"detail": "Asset Not Found"}
+
+
+async def test_spa_path_traversal_blocked(client: AsyncClient, ensure_frontend_dist):
+    """Path traversal attempts via SPA route must return 404 and not serve host files."""
+    r = await client.get("/%2e%2e/%2e%2e/pyproject.toml")
+    assert r.status_code == 404
+    assert r.json() == {"detail": "Not Found"}
+
 
 async def test_api_routes_priority_over_spa(client: AsyncClient, ensure_frontend_dist):
     """API endpoints are matched before the SPA fallback."""

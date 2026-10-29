@@ -30,6 +30,18 @@ target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
 
+def include_object(object, name, type_, reflected, compare_to) -> bool:
+    """Filter out database-managed FTS constructs during schema comparison.
+
+    The tsvector ``search_vector`` column and trigram indexes are provisioned
+    directly in PostgreSQL via migration a1b2c3d4e5f6_full_text_search.py and
+    omitted from ORM metadata for SQLite test compatibility.
+    """
+    if type_ == "column" and name == "search_vector":
+        return False
+    return not (type_ == "index" and name and (name.endswith("_trgm") or name.endswith("_search_vector")))
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode (emit SQL without a live connection)."""
     url = config.get_main_option("sqlalchemy.url")
@@ -39,6 +51,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -50,6 +63,7 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()

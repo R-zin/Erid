@@ -113,14 +113,21 @@ class HubBridge:
 
     # -- snapshot + WS supervisor ----------------------------------------------
     async def snapshot(self, slug: str) -> dict:
-        """Authoritative workspace state: summary + tasks + decisions + presence."""
-        summary, tasks, decisions, presence = await asyncio.gather(
+        """Authoritative workspace state: summary + tasks + decisions + presence + handoffs."""
+        summary, tasks, decisions, presence, handoffs = await asyncio.gather(
             self.client.workspace_summary(slug),
             self.client.current_tasks(slug),
             self.client.recent_decisions(slug),
             self.client.active_developers(slug),
+            self.client.list_handoffs(slug),
         )
-        return {"summary": summary, "tasks": tasks, "decisions": decisions, "presence": presence}
+        return {
+            "summary": summary,
+            "tasks": tasks,
+            "decisions": decisions,
+            "presence": presence,
+            "handoffs": handoffs,
+        }
 
     def _ws_url(self, slug: str) -> str:
         base = self.client._base  # http(s) base URL, e.g. http://localhost:8000
@@ -275,6 +282,43 @@ class HubBridge:
             raise BadParams("search requires 'q'")
         return await self.client.search_context(self._slug(params), q, limit=params.get("limit"))
 
+    async def m_listHandoffs(self, params: dict):
+        return await self.client.list_handoffs(
+            self._slug(params),
+            status=params.get("status"),
+            limit=params.get("limit"),
+        )
+
+    async def m_createHandoff(self, params: dict):
+        summary = params.get("summary")
+        if not summary:
+            raise BadParams("createHandoff requires 'summary'")
+        return await self.client.create_handoff(
+            self._slug(params),
+            summary,
+            task_id=params.get("task_id"),
+            recipient=params.get("recipient"),
+            branch=params.get("branch"),
+            worktree=params.get("worktree"),
+            files_changed=params.get("files_changed"),
+            commands_run=params.get("commands_run"),
+            blockers=params.get("blockers"),
+            next_action=params.get("next_action"),
+            created_by=params.get("created_by"),
+        )
+
+    async def m_acknowledgeHandoff(self, params: dict):
+        handoff_id = params.get("handoff_id") or params.get("id")
+        if not handoff_id:
+            raise BadParams("acknowledgeHandoff requires 'handoff_id'")
+        return await self.client.acknowledge_handoff(self._slug(params), handoff_id)
+
+    async def m_resolveHandoff(self, params: dict):
+        handoff_id = params.get("handoff_id") or params.get("id")
+        if not handoff_id:
+            raise BadParams("resolveHandoff requires 'handoff_id'")
+        return await self.client.resolve_handoff(self._slug(params), handoff_id)
+
     async def m_listWorkspaces(self, params: dict):
         return await self.client.list_workspaces()
 
@@ -297,6 +341,10 @@ class HubBridge:
         "deleteDecision": m_deleteDecision,
         "listPresence": m_listPresence,
         "postPresence": m_postPresence,
+        "listHandoffs": m_listHandoffs,
+        "createHandoff": m_createHandoff,
+        "acknowledgeHandoff": m_acknowledgeHandoff,
+        "resolveHandoff": m_resolveHandoff,
         "search": m_search,
         "listWorkspaces": m_listWorkspaces,
         "shutdown": m_shutdown,

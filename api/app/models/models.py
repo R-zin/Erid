@@ -87,6 +87,9 @@ class Workspace(Base):
     handoffs: Mapped[list[Handoff]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     presences: Mapped[list[Presence]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     actors: Mapped[list[Actor]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    oauth_identities: Mapped[list[OAuthIdentity]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
 
 
 class Actor(Base):
@@ -117,14 +120,17 @@ class OAuthIdentity(Base):
 
     OAuth is only an alternate way to mint the internal JWT: a successful
     social login resolves to a real ``Actor`` row (role ``writer``, no API key)
-    and signs a token for it. ``provider`` + ``provider_subject`` is unique, so
-    a given external account always maps to the same actor across logins.
+    and signs a token for it. ``(provider, provider_subject, workspace_id)`` is unique,
+    so a given external account maps to its actor within each workspace.
     """
 
     __tablename__ = "oauth_identities"
-    __table_args__ = (UniqueConstraint("provider", "provider_subject", name="uq_oauth_provider_subject"),)
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_subject", "workspace_id", name="uq_oauth_provider_subject_workspace"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     provider: Mapped[str] = mapped_column(String(32))  # "google" | "github"
     provider_subject: Mapped[str] = mapped_column(String(255))  # stable account id from the provider
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
@@ -132,6 +138,7 @@ class OAuthIdentity(Base):
     actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("actors.id", ondelete="CASCADE"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    workspace: Mapped[Workspace] = relationship(back_populates="oauth_identities")
     actor: Mapped[Actor] = relationship()
 
 

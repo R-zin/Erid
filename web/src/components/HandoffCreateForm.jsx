@@ -5,7 +5,7 @@ import { ApiError } from '../api.js'
 // the rest (next action, blockers, branch, linked task) folds out under the
 // toggle so the common case stays one field. The new handoff is applied
 // optimistically and replaced by the WebSocket `handoff_created` event.
-export default function HandoffCreateForm({ client, disabled, tasks = [], onOptimistic, onRollback, onError }) {
+export default function HandoffCreateForm({ client, disabled, tasks = [], onOptimistic, onRollback, onReconcile, onError }) {
   const [summary, setSummary] = useState('')
   const [nextAction, setNextAction] = useState('')
   const [blockers, setBlockers] = useState('')
@@ -36,14 +36,18 @@ export default function HandoffCreateForm({ client, disabled, tasks = [], onOpti
 
     setBusy(true)
     try {
-      await client.createHandoff({
+      const created = await client.createHandoff({
         summary: trimmed,
         next_action: nextAction.trim() || null,
         blockers: blockers.trim() || null,
         branch: branch.trim() || null,
         task_id: taskId || null,
       })
-      onRollback(tempId) // real record arrives via the WebSocket
+      if (onReconcile) {
+        onReconcile(tempId, created)
+      } else {
+        onRollback(tempId)
+      }
       setSummary('')
       setNextAction('')
       setBlockers('')

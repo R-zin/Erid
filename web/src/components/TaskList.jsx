@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import TaskCreateForm from './TaskCreateForm.jsx'
+import { matchesAgentFilter } from '../utils/filter.js'
 
 const STATUS_ORDER = { in_progress: 0, blocked: 1, todo: 2, done: 3 }
 const STATUSES = ['todo', 'in_progress', 'blocked', 'done']
@@ -8,15 +9,7 @@ export default function TaskList({ tasks, client, canWrite, onMutate, agentFilte
   const [createError, setCreateError] = useState(null)
   const [rowError, setRowError] = useState(null)
 
-  const filtered = tasks.filter((t) => {
-    if (agentFilter === 'all') return true
-    if (!t.assigned_to) return false
-    if (agentFilter === 'human') return !/(claude|cursor|codex|agent|bot)/i.test(t.assigned_to)
-    if (agentFilter === 'claude') return /claude/i.test(t.assigned_to)
-    if (agentFilter === 'cursor') return /cursor/i.test(t.assigned_to)
-    if (agentFilter === 'codex') return /codex/i.test(t.assigned_to)
-    return true
-  })
+  const filtered = tasks.filter((t) => matchesAgentFilter(t.assigned_to, agentFilter))
 
   const sorted = [...filtered].sort(
     (a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9),
@@ -25,6 +18,14 @@ export default function TaskList({ tasks, client, canWrite, onMutate, agentFilte
   const addOptimistic = (task) => {
     setCreateError(null)
     onMutate((prev) => [...prev, task])
+  }
+  const reconcile = (tempId, real) => {
+    onMutate((prev) => {
+      if (prev.some((t) => t.id === real.id)) {
+        return prev.filter((t) => t.id !== tempId)
+      }
+      return prev.map((t) => (t.id === tempId ? real : t))
+    })
   }
   const rollback = (tempId) => onMutate((prev) => prev.filter((t) => t.id !== tempId))
 
@@ -73,6 +74,7 @@ export default function TaskList({ tasks, client, canWrite, onMutate, agentFilte
           disabled={!client}
           onOptimistic={addOptimistic}
           onRollback={rollback}
+          onReconcile={reconcile}
           onError={setCreateError}
         />
         {createError && <div className="error-banner inline">{createError}</div>}

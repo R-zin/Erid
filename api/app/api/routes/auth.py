@@ -101,7 +101,7 @@ async def _resolve_or_create_oauth_actor(
 ) -> Actor:
     """Map an external OAuth identity to a workspace ``Actor`` (create on first login).
 
-    A given ``(provider, provider_subject)`` always resolves to the same actor.
+    A given ``(provider, provider_subject, workspace_id)`` resolves to the actor for this workspace.
     The actor is created role ``writer`` with no API key (``key_hash`` NULL) —
     OAuth-issued JWTs authenticate purely via ``sub`` → actor-name resolution,
     which the existing token-verification path already supports.
@@ -112,6 +112,7 @@ async def _resolve_or_create_oauth_actor(
         select(OAuthIdentity).where(
             OAuthIdentity.provider == provider,
             OAuthIdentity.provider_subject == profile.subject,
+            OAuthIdentity.workspace_id == workspace.id,
         )
     )
     identity = result.scalars().first()
@@ -127,6 +128,7 @@ async def _resolve_or_create_oauth_actor(
     await db.flush()  # materialize actor.id for the FK
     db.add(
         OAuthIdentity(
+            workspace_id=workspace.id,
             provider=provider,
             provider_subject=profile.subject,
             email=profile.email,

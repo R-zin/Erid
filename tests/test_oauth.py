@@ -116,10 +116,51 @@ async def test_oauth_identity_reused_on_second_login(client, monkeypatch):
 
     r1 = await client.get("/api/auth/google/callback", params=params, follow_redirects=False)
     r2 = await client.get("/api/auth/google/callback", params=params, follow_redirects=False)
-    name1 = parse_qs(urlparse(r1.headers["location"]).fragment)["name"][0]
-    name2 = parse_qs(urlparse(r2.headers["location"]).fragment)["name"][0]
-    # Same external subject → same actor, no duplicate created.
+    frag1 = _callback_fragment(r1.headers["location"])
+    frag2 = _callback_fragment(r2.headers["location"])
+    name1 = frag1["name"][0]
+    name2 = frag2["name"][0]
+    # Same external subject → same actor in this workspace, no duplicate created.
     assert name1 == name2
+
+
+async def test_oauth_multi_workspace_login(client, monkeypatch):
+    """The same external OAuth account can log into multiple workspaces cleanly."""
+    _configure("github", monkeypatch)
+    _patch_profile("github", monkeypatch, subject="user-multi-42")
+
+    # 1. Login to workspace acme
+    state_acme = oauth._serializer().dumps({"provider": "github", "slug": "acme", "nonce": "1"})
+    r_acme = await client.get(
+        "/api/auth/github/callback",
+        params={"code": "fake-1", "state": state_acme},
+        follow_redirects=False,
+    )
+    assert r_acme.status_code == 307
+    frag_acme = _callback_fragment(r_acme.headers["location"])
+    token_acme = frag_acme["token"][0]
+
+    # Verify access to acme
+    bh_acme = {"Authorization": f"Bearer {token_acme}"}
+    assert (await client.get("/api/workspaces/acme/tasks", headers=bh_acme)).status_code == 200
+
+    # 2. Login to workspace beta with the SAME OAuth account
+    state_beta = oauth._serializer().dumps({"provider": "github", "slug": "beta", "nonce": "2"})
+    r_beta = await client.get(
+        "/api/auth/github/callback",
+        params={"code": "fake-2", "state": state_beta},
+        follow_redirects=False,
+    )
+    assert r_beta.status_code == 307
+    frag_beta = _callback_fragment(r_beta.headers["location"])
+    token_beta = frag_beta["token"][0]
+
+    # Verify access to beta works without 403 or cross-workspace collision
+    bh_beta = {"Authorization": f"Bearer {token_beta}"}
+    assert (await client.get("/api/workspaces/beta/tasks", headers=bh_beta)).status_code == 200
+    assert (
+        await client.post("/api/workspaces/beta/decisions", json={"title": "in beta"}, headers=bh_beta)
+    ).status_code == 201
 
 
 async def test_callback_rejects_bad_state(client, monkeypatch):

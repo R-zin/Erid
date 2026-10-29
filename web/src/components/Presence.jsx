@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { matchesAgentFilter } from '../utils/filter.js'
 
 export default function Presence({ presence, agentFilter = 'all', client = null, canWrite = false }) {
   const [showCheckIn, setShowCheckIn] = useState(false)
@@ -32,14 +33,7 @@ export default function Presence({ presence, agentFilter = 'all', client = null,
     }
   }
 
-  const filtered = presence.filter((p) => {
-    if (agentFilter === 'all') return true
-    if (agentFilter === 'human') return p.actor_type === 'human'
-    if (agentFilter === 'claude') return /claude/i.test(p.actor_name)
-    if (agentFilter === 'cursor') return /cursor/i.test(p.actor_name)
-    if (agentFilter === 'codex') return /codex/i.test(p.actor_name)
-    return true
-  })
+  const filtered = presence.filter((p) => matchesAgentFilter(p.actor_name, agentFilter, p.actor_type))
 
   return (
     <div className="card-panel">

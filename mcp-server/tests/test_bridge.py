@@ -135,6 +135,10 @@ async def test_method_endpoint_mapping():
     await _call(bridge, "listDecisions")
     await _call(bridge, "listWorkspaces")
     await _call(bridge, "search", {"q": "q"})
+    await _call(bridge, "listHandoffs", {"status": "open"})
+    await _call(bridge, "createHandoff", {"summary": "done with auth"})
+    await _call(bridge, "acknowledgeHandoff", {"handoff_id": "H1"})
+    await _call(bridge, "resolveHandoff", {"handoff_id": "H1"})
 
     methods_paths = {(m, p) for m, p in seen}
     assert ("GET", "/api/workspaces/ws/summary") in methods_paths
@@ -144,6 +148,10 @@ async def test_method_endpoint_mapping():
     assert ("GET", "/api/workspaces/ws/decisions") in methods_paths
     assert ("GET", "/api/workspaces") in methods_paths  # no slug (list workspaces)
     assert ("GET", "/api/workspaces/ws/search") in methods_paths
+    assert ("GET", "/api/workspaces/ws/handoffs") in methods_paths
+    assert ("POST", "/api/workspaces/ws/handoffs") in methods_paths
+    assert ("POST", "/api/workspaces/ws/handoffs/H1/acknowledge") in methods_paths
+    assert ("POST", "/api/workspaces/ws/handoffs/H1/resolve") in methods_paths
     await bridge.client.close()
 
 
@@ -340,7 +348,7 @@ async def test_ws_connect_and_event(live_server, client):
     bridge = HubBridge(client=bridge_client, default_slug=slug, out=collector.out)
 
     snap = await bridge.m_connect({})
-    assert "summary" in snap and "tasks" in snap and "decisions" in snap and "presence" in snap
+    assert "summary" in snap and "tasks" in snap and "decisions" in snap and "presence" in snap and "handoffs" in snap
 
     # The supervisor should signal it's connected.
     await collector.wait_for(lambda m: m.get("method") == "status" and m["params"]["connected"] is True)

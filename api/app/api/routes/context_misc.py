@@ -85,30 +85,24 @@ async def workspace_summary(
     db: AsyncSession = Depends(get_db),
 ) -> WorkspaceSummary:
     workspace = principal.workspace
-    # Aggregate in SQL — loading every Task/Decision row just to count it in
-    # Python degrades badly as a workspace grows. Presence stays a row fetch
-    # because the response needs the actor names, not just a count.
-    task_count = (
-        await db.execute(select(func.count()).select_from(Task).where(Task.workspace_id == workspace.id))
-    ).scalar_one()
-    open_task_count = (
-        await db.execute(
-            select(func.count())
-            .select_from(Task)
-            .where(Task.workspace_id == workspace.id, Task.status != TaskStatus.done)
-        )
-    ).scalar_one()
-    decision_count = (
-        await db.execute(select(func.count()).select_from(Decision).where(Decision.workspace_id == workspace.id))
-    ).scalar_one()
-    # Handoffs still needing a pickup (acknowledged ones are in flight, not open).
-    open_handoff_count = (
-        await db.execute(
-            select(func.count())
-            .select_from(Handoff)
-            .where(Handoff.workspace_id == workspace.id, Handoff.status == HandoffStatus.open)
-        )
-    ).scalar_one()
+    # Aggregate in a single SQL query — combining task, decision, and handoff
+    # counts via conditional aggregation and scalar subqueries avoids 4 sequential
+    # round-trips to the database on every summary request.
+    wid = workspace.id
+    decision_sub = select(func.count(Decision.id)).where(Decision.workspace_id == wid).scalar_subquery()
+    handoff_sub = (
+        select(func.count(Handoff.id))
+        .where(Handoff.workspace_id == wid, Handoff.status == HandoffStatus.open)
+        .scalar_subquery()
+    )
+    counts_stmt = select(
+        func.count(Task.id),
+        func.count(Task.id).filter(Task.status != TaskStatus.done),
+        decision_sub,
+        handoff_sub,
+    ).where(Task.workspace_id == wid)
+    counts_row = (await db.execute(counts_stmt)).one()
+    task_count, open_task_count, decision_count, open_handoff_count = counts_row
     presences = (
         (
             await db.execute(

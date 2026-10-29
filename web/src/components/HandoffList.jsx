@@ -1,24 +1,25 @@
 import React, { useState } from 'react'
 import HandoffCreateForm from './HandoffCreateForm.jsx'
+import { matchesAgentFilter } from '../utils/filter.js'
 
 export default function HandoffList({ handoffs, client, canWrite, tasks = [], onMutate, agentFilter = 'all' }) {
   const [createError, setCreateError] = useState(null)
   const [rowError, setRowError] = useState(null)
   const taskTitle = (id) => (id ? tasks.find((t) => t.id === id)?.title : null)
 
-  const filtered = handoffs.filter((h) => {
-    if (agentFilter === 'all') return true
-    if (!h.created_by) return false
-    if (agentFilter === 'human') return !/(claude|cursor|codex|agent)/i.test(h.created_by)
-    if (agentFilter === 'claude') return /claude/i.test(h.created_by)
-    if (agentFilter === 'cursor') return /cursor/i.test(h.created_by)
-    if (agentFilter === 'codex') return /codex/i.test(h.created_by)
-    return true
-  })
+  const filtered = handoffs.filter((h) => matchesAgentFilter(h.created_by, agentFilter))
 
   const addOptimistic = (handoff) => {
     setCreateError(null)
     onMutate?.((prev) => [handoff, ...prev])
+  }
+  const reconcile = (tempId, real) => {
+    onMutate?.((prev) => {
+      if (prev.some((h) => h.id === real.id)) {
+        return prev.filter((h) => h.id !== tempId)
+      }
+      return prev.map((h) => (h.id === tempId ? real : h))
+    })
   }
   const rollback = (tempId) => onMutate?.((prev) => prev.filter((h) => h.id !== tempId))
 
@@ -89,6 +90,7 @@ export default function HandoffList({ handoffs, client, canWrite, tasks = [], on
             tasks={tasks}
             onOptimistic={addOptimistic}
             onRollback={rollback}
+            onReconcile={reconcile}
             onError={setCreateError}
           />
         )}

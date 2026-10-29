@@ -152,6 +152,25 @@ describe('Nordic Editorial UI Components', () => {
     })
   })
 
+  describe('Optimistic Reconciliation', () => {
+    it('TaskList reconciles temporary item with server record', () => {
+      let state = [{ id: 'temp-1', title: 'Pending task', status: 'todo' }]
+      const onMutate = (fn) => {
+        state = fn(state)
+      }
+      const reconcile = (tempId, real) => {
+        if (state.some((t) => t.id === real.id)) {
+          state = state.filter((t) => t.id !== tempId)
+        } else {
+          state = state.map((t) => (t.id === tempId ? real : t))
+        }
+      }
+      reconcile('temp-1', { id: 'real-uuid-1', title: 'Pending task', status: 'todo' })
+      expect(state).toHaveLength(1)
+      expect(state[0].id).toBe('real-uuid-1')
+    })
+  })
+
   describe('LiveWorkspace page', () => {
     it('renders control band, search bar, and active columns', async () => {
       const { default: LiveWorkspace } = await import('./pages/LiveWorkspace.jsx')

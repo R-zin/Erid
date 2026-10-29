@@ -7,7 +7,7 @@ const STATUSES = ['todo', 'in_progress', 'blocked', 'done']
 // optimistically (the WebSocket `task_created` event will upsert the real,
 // server-assigned record over it); on failure we roll back and surface the API
 // error with a re-auth hint on 401/403.
-export default function TaskCreateForm({ client, disabled, onOptimistic, onRollback, onError }) {
+export default function TaskCreateForm({ client, disabled, onOptimistic, onRollback, onReconcile, onError }) {
   const [title, setTitle] = useState('')
   const [status, setStatus] = useState('todo')
   const [assignedTo, setAssignedTo] = useState('')
@@ -35,13 +35,16 @@ export default function TaskCreateForm({ client, disabled, onOptimistic, onRollb
 
     setBusy(true)
     try {
-      await client.createTask({
+      const created = await client.createTask({
         title: trimmed,
         status,
         assigned_to: assignedTo.trim() || null,
       })
-      // Real record arrives via the WebSocket; drop the placeholder.
-      onRollback(tempId)
+      if (onReconcile) {
+        onReconcile(tempId, created)
+      } else {
+        onRollback(tempId)
+      }
       setTitle('')
       setAssignedTo('')
       setStatus('todo')

@@ -6,7 +6,7 @@ import { ApiError } from '../api.js'
 // event prepends the real, server-assigned record over it); on failure we roll
 // back and surface the API error with a re-auth hint on 401/403. Optionally
 // links the decision to an existing task (`decisions.task_id`).
-export default function DecisionCreateForm({ client, disabled, tasks = [], onOptimistic, onRollback, onError }) {
+export default function DecisionCreateForm({ client, disabled, tasks = [], onOptimistic, onRollback, onReconcile, onError }) {
   const [title, setTitle] = useState('')
   const [reason, setReason] = useState('')
   const [relatedFiles, setRelatedFiles] = useState('')
@@ -36,15 +36,18 @@ export default function DecisionCreateForm({ client, disabled, tasks = [], onOpt
 
     setBusy(true)
     try {
-      await client.createDecision({
+      const created = await client.createDecision({
         title: trimmed,
         reason: reason.trim() || null,
         related_files: relatedFiles.trim() || null,
         made_by: madeBy.trim() || null,
         task_id: taskId || null,
       })
-      // Real record arrives via the WebSocket; drop the placeholder.
-      onRollback(tempId)
+      if (onReconcile) {
+        onReconcile(tempId, created)
+      } else {
+        onRollback(tempId)
+      }
       setTitle('')
       setReason('')
       setRelatedFiles('')

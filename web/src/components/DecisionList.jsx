@@ -1,24 +1,25 @@
 import React, { useState } from 'react'
 import DecisionCreateForm from './DecisionCreateForm.jsx'
+import { matchesAgentFilter } from '../utils/filter.js'
 
 export default function DecisionList({ decisions, client, canWrite, tasks = [], onMutate, agentFilter = 'all' }) {
   const [createError, setCreateError] = useState(null)
   const [rowError, setRowError] = useState(null)
   const taskTitle = (id) => (id ? tasks.find((t) => t.id === id)?.title : null)
 
-  const filtered = decisions.filter((d) => {
-    if (agentFilter === 'all') return true
-    if (!d.made_by) return false
-    if (agentFilter === 'human') return !/(claude|cursor|codex|agent)/i.test(d.made_by)
-    if (agentFilter === 'claude') return /claude/i.test(d.made_by)
-    if (agentFilter === 'cursor') return /cursor/i.test(d.made_by)
-    if (agentFilter === 'codex') return /codex/i.test(d.made_by)
-    return true
-  })
+  const filtered = decisions.filter((d) => matchesAgentFilter(d.made_by, agentFilter))
 
   const addOptimistic = (decision) => {
     setCreateError(null)
     onMutate?.((prev) => [decision, ...prev])
+  }
+  const reconcile = (tempId, real) => {
+    onMutate?.((prev) => {
+      if (prev.some((d) => d.id === real.id)) {
+        return prev.filter((d) => d.id !== tempId)
+      }
+      return prev.map((d) => (d.id === tempId ? real : d))
+    })
   }
   const rollback = (tempId) => onMutate?.((prev) => prev.filter((d) => d.id !== tempId))
 
@@ -59,6 +60,7 @@ export default function DecisionList({ decisions, client, canWrite, tasks = [], 
             tasks={tasks}
             onOptimistic={addOptimistic}
             onRollback={rollback}
+            onReconcile={reconcile}
             onError={setCreateError}
           />
         )}

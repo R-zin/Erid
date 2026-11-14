@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import Column, select
+from sqlalchemy import literal_column, select
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -76,13 +76,11 @@ def _search_vector(model: type) -> ColumnElement:
     """Reference the generated ``search_vector`` tsvector column on a model's table.
 
     The column exists only in Postgres (added by the FTS migration) and is not
-    ORM-mapped, so it is attached to the model's ``Table`` for query use. Queries
-    never SELECT it, so its presence in metadata does not affect ORM loading.
+    ORM-mapped. It is referenced as a free-standing typed column expression rather
+    than appended to the shared ``Table``: mutating the metadata at query time made
+    every later ``create_all`` (e.g. on SQLite) try to render a TSVECTOR column.
     """
-    table = model.__table__
-    if "search_vector" not in table.c:
-        table.append_column(Column("search_vector", TSVECTOR))
-    return table.c.search_vector
+    return literal_column(f"{model.__tablename__}.search_vector", type_=TSVECTOR)
 
 
 # ---------------------------------------------------------------------------

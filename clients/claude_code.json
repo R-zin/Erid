@@ -1,13 +1,11 @@
 {
   "mcpServers": {
-    "context-hub": {
-      "command": "uv",
-      "args": ["run", "python", "mcp-server/src/server.py", "--transport", "stdio"],
-      "env": {
-        "API_BASE": "http://localhost:8000",
-        "WORKSPACE_SLUG": "your-workspace",
-        "WORKSPACE_API_KEY": "",
-        "WORKSPACE_TOKEN": ""
+    "erid": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "X-Erid-Workspace": "your-workspace",
+        "X-API-Key": "${ERID_API_KEY}"
       }
     }
   }

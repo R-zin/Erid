@@ -10,4 +10,4 @@ greenlet>=3.5.4
 pyjwt>=2.9.0
 cryptography>=42.0.0
 itsdangerous>=2.2.0
-mcp>=1.28.0
+mcp>=1.28,<2

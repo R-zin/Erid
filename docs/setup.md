@@ -11,6 +11,7 @@ curl http://localhost:8000/health   # {"status":"ok"}
 ```
 
 - API docs (OpenAPI): http://localhost:8000/docs
+- MCP endpoint (Streamable HTTP): http://localhost:8000/mcp
 - Dashboard: `cd web && npm install && npm run dev` → http://localhost:5173
 - Client setup: [clients/README.md](../clients/README.md)
 - Tests: `uv run pytest`

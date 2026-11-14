@@ -92,7 +92,8 @@ async def test_presence_events_are_live_only(client, db_engine):
     slug = _slug()
     bus = await get_event_bus()
     async with bus.subscribe(slug) as queue:
-        await client.post(f"/api/workspaces/{slug}/presence", json={"actor_name": "a"})
+        r = await client.post(f"/api/workspaces/{slug}/presence", json={"actor_name": "a"})
+        assert r.status_code == 200, r.text
         event = await asyncio.wait_for(queue.get(), timeout=2)
     assert event["type"] == "presence_updated"
     assert "seq" not in event

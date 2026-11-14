@@ -73,13 +73,25 @@ class InProcessEventBus:
         self.deliver(workspace_slug, {"workspace": workspace_slug, **event})
 
     def deliver(self, workspace_slug: str, payload: dict[str, Any]) -> None:
+        try:
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            current = None
         for queue in list(self._subscribers.get(workspace_slug, ())):
-            _offer(queue, payload)
+            loop = queue.loop  # type: ignore[attr-defined]
+            if loop is current:
+                _offer(queue, payload)
+            elif not loop.is_closed():
+                # asyncio.Queue isn't thread-safe: a put from another thread's
+                # loop wouldn't wake this subscriber's loop, so the event would
+                # sit until something else did. Hand it over on the owner loop.
+                loop.call_soon_threadsafe(_offer, queue, payload)
 
     @contextlib.asynccontextmanager
     async def subscribe(self, workspace_slug: str) -> AsyncIterator[asyncio.Queue]:
         queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         queue.workspace_slug = workspace_slug  # type: ignore[attr-defined]  # for _offer's log line
+        queue.loop = asyncio.get_running_loop()  # type: ignore[attr-defined]  # owner loop, for deliver()
         self._subscribers.setdefault(workspace_slug, set()).add(queue)
         try:
             yield queue
@@ -227,11 +239,16 @@ async def get_event_bus() -> InProcessEventBus:
 
 
 async def close_event_bus() -> None:
-    """Stop the bus's background listener (app shutdown / tests)."""
+    """Stop the Postgres bus's LISTEN connection on app shutdown.
+
+    The in-process bus holds no resources and is left in place: dropping it
+    would strand subscribers still attached to it (e.g. another server's
+    lifespan ending in the same process while sockets are open).
+    """
     global _bus
     if isinstance(_bus, PostgresEventBus):
         await _bus.close()
-    _bus = None
+        _bus = None
 
 
 def reset_event_bus() -> None:

@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Check code formatting
-        run: uv run ruff format --check api mcp-server tests .github/scripts
+        run: uv run ruff format --check api mcp-server tests
 
   ruff-check:
     name: ruff-check
@@ -46,7 +46,7 @@ jobs:
           enable-cache: true
 
       - name: Lint Python codebase
-        run: uv run ruff check api mcp-server tests .github/scripts
+        run: uv run ruff check api mcp-server tests
 
   pytest:
     name: pytest

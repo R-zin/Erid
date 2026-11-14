@@ -1,6 +1,7 @@
 # tooling / editors
 .claude
-.idea
+.idea/
+.agenthub/
 .DS_Store
 
 # python
@@ -16,6 +17,7 @@ __pycache__/
 # node / web
 node_modules/
 web/dist/
+web/.vite/
 
 # local data
 *.db

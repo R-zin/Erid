@@ -4,7 +4,8 @@ A request resolves to a :class:`Principal`, which may act on a resource only if
 it holds the matching :class:`Permission`. Four credential shapes are accepted
 (highest precedence first — a bearer JWT, then ``X-API-Key``/``?api_key=``):
 
-- **legacy workspace key** — the shared ``workspaces.api_key``. Maps to ``owner``
+- **legacy workspace key** — the shared workspace key (only its SHA-256 is
+  stored, in ``workspaces.api_key_hash``). Maps to ``owner``
   (full access) so existing deployments keep working.
 - **actor key** — a per-actor API key (``actors.key_hash`` holds only its
   SHA-256). Resolves to that actor's role + grants.
@@ -18,7 +19,6 @@ Authorization is fine-grained: each route declares the action it requires via
 :func:`require_action`.
 """
 
-import hashlib
 import secrets
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -31,11 +31,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.keys import hash_api_key, key_matches
 from app.core.settings import settings
 from app.core.tokens import verify_token
 from app.db.session import get_db
 from app.models.models import ROLE_GRANTS, Actor, ActorRole, Permission, Workspace
-from app.services.workspace_service import get_or_create_workspace, get_workspace_by_slug
+from app.services.workspaces import get_or_create_workspace, get_workspace_by_slug
 
 # auto_error=False so we can return a precise 401/403 ourselves and so WS
 # connections (which can't set headers easily) can pass the key as a query param.
@@ -62,11 +63,6 @@ class Principal:
 
     def has(self, permission: Permission) -> bool:
         return Permission.owner in self.permissions or permission in self.permissions
-
-
-def hash_api_key(raw: str) -> str:
-    """Stable SHA-256 digest used to store/look up actor keys (never raw)."""
-    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _permissions_for(role: ActorRole, grants: frozenset[Permission]) -> frozenset[Permission]:
@@ -123,7 +119,7 @@ async def resolve_credentials(
 ) -> Principal | None:
     """Resolve presented credentials to a Principal, or ``None`` if they do not
     authenticate at all. Bearer JWT takes precedence over a raw key."""
-    if workspace.api_key and key and secrets.compare_digest(key, workspace.api_key):
+    if key_matches(key, workspace.api_key_hash):
         # Legacy workspace key → full access (owner). Keeps old clients working.
         return Principal(
             kind=PrincipalKind.legacy_key,
@@ -193,7 +189,7 @@ async def resolve_principal(
     key = header_key or query_key
     bearer_token = bearer.credentials if bearer else None
 
-    if not workspace.api_key:
+    if not workspace.secured:
         # Open workspace (no shared key). An actor credential may still carry
         # finer-grained permissions, but nothing is enforced here.
         principal = await resolve_credentials(db, workspace, key=key, bearer=bearer_token)
@@ -244,7 +240,7 @@ async def resolve_ws_principal(
     principal = await resolve_credentials(db, workspace, key=key, bearer=token)
     if principal is not None:
         return principal
-    if settings.allow_open_workspaces and not workspace.api_key and not (key or token):
+    if settings.allow_open_workspaces and not workspace.secured and not (key or token):
         return Principal(
             kind=PrincipalKind.open,
             workspace=workspace,

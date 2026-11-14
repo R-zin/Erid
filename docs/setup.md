@@ -6,7 +6,7 @@ and configuration.
 Quick start:
 
 ```bash
-docker compose up -d postgres redis api
+docker compose up -d postgres api
 curl http://localhost:8000/health   # {"status":"ok"}
 ```
 

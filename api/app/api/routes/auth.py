@@ -22,7 +22,7 @@ from app.core.settings import settings
 from app.core.tokens import issue_token
 from app.db.session import get_db
 from app.models.models import Actor, ActorRole, OAuthIdentity, Workspace
-from app.services.workspace_service import get_or_create_workspace
+from app.services.workspaces import get_or_create_workspace, get_workspace_by_slug
 
 router = APIRouter()
 
@@ -106,7 +106,13 @@ async def _resolve_or_create_oauth_actor(
     OAuth-issued JWTs authenticate purely via ``sub`` → actor-name resolution,
     which the existing token-verification path already supports.
     """
-    workspace: Workspace = await get_or_create_workspace(db, slug, mint_key=False)
+    # Honour closed mode: never create a workspace for an unknown slug there.
+    if settings.allow_open_workspaces:
+        workspace: Workspace = await get_or_create_workspace(db, slug)
+    else:
+        workspace = await get_workspace_by_slug(db, slug)
+        if workspace is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"workspace '{slug}' not found")
 
     result = await db.execute(
         select(OAuthIdentity).where(

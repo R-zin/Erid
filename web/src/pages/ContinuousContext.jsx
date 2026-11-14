@@ -5,7 +5,7 @@ export default function ContinuousContext({ onNavigateWorkspace }) {
   const [activeTab, setActiveTab] = useState('with-erid')
 
   const copyDocker = () => {
-    navigator.clipboard?.writeText('docker compose up -d postgres redis api web')
+    navigator.clipboard?.writeText('docker compose up -d postgres api web')
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -184,11 +184,11 @@ export default function ContinuousContext({ onNavigateWorkspace }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span className="material-symbols-outlined" style={{ color: 'var(--primary)', fontSize: 20 }}>swap_horiz</span>
                   <div>
-                    <div style={{ fontWeight: 600, color: 'var(--primary)', fontSize: 13 }}>Redis Event Bus</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--on-surface-variant)' }}>Low-latency Pub/Sub</div>
+                    <div style={{ fontWeight: 600, color: 'var(--primary)', fontSize: 13 }}>Postgres Event Bus</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--on-surface-variant)' }}>Transactional LISTEN/NOTIFY</div>
                   </div>
                 </div>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--secondary-container)', fontWeight: 600 }}>&lt;1ms</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--secondary-container)', fontWeight: 600 }}>on commit</span>
               </div>
 
               <div
@@ -337,7 +337,7 @@ export default function ContinuousContext({ onNavigateWorkspace }) {
               <div>
                 <span style={{ color: 'var(--primary)', fontWeight: 600 }}>1. Claude Code wraps up:</span>
                 <div style={{ color: 'var(--on-surface-variant)' }}>&gt; create_handoff(task="auth-refactor", summary="JWT verification extracted to jwt_helper.py")</div>
-                <div style={{ color: 'var(--green)', marginTop: 4 }}>✔ Handoff recorded. Broadcasted to live Redis bus.</div>
+                <div style={{ color: 'var(--green)', marginTop: 4 }}>✔ Handoff recorded. Broadcast to every connected session.</div>
                 <br />
                 <span style={{ color: 'var(--primary)', fontWeight: 600 }}>2. Cursor opens next session:</span>
                 <div style={{ color: 'var(--on-surface-variant)' }}>&gt; catch_up()</div>

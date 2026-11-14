@@ -59,6 +59,10 @@ export function useWorkspace(slug, credential, authType) {
     let retries = 0
     let retryTimer = null
     let summaryTimer = null
+    // Highest event seq applied so far. On reconnect we resume from it
+    // (?since=) instead of reloading every collection; null = nothing to
+    // resume from yet, so a reconnect falls back to a full snapshot.
+    let lastSeq = null
 
     const scheduleSummary = () => {
       clearTimeout(summaryTimer)
@@ -69,7 +73,7 @@ export function useWorkspace(slug, credential, authType) {
 
     const connectWs = () => {
       if (cancelled) return
-      ws = new WebSocket(client.socketUrl())
+      ws = new WebSocket(client.socketUrl(lastSeq))
       wsRef.current = ws
 
       ws.onopen = () => {
@@ -84,6 +88,12 @@ export function useWorkspace(slug, credential, authType) {
           return // malformed frame: drop, keep streaming
         }
         if (event.type === 'ping') return // keepalive
+        if (event.type === 'resync_required') {
+          // The server can't replay the gap (too far behind / pruned).
+          load().catch(() => {})
+          return
+        }
+        if (typeof event.seq === 'number') lastSeq = Math.max(lastSeq ?? 0, event.seq)
         setLastEvent({ type: event.type, data: event.data, ts: Date.now() })
         if (event.type === 'workspace_deleted') {
           setError(`Workspace '${slug}' was deleted.`)
@@ -106,7 +116,14 @@ export function useWorkspace(slug, credential, authType) {
         const delay = Math.min(BACKOFF_MIN * 2 ** retries, BACKOFF_MAX)
         retries += 1
         retryTimer = setTimeout(() => {
-          load().catch(() => {}) // authoritative resync after a drop
+          if (lastSeq == null) {
+            load().catch(() => {}) // nothing to resume from: full snapshot
+          } else {
+            // Stored events replay via ?since=; presence heartbeats aren't
+            // stored, so refresh just that (and the counts).
+            client.presence().then(setPresence).catch(() => {})
+            scheduleSummary()
+          }
           connectWs()
         }, delay)
       }

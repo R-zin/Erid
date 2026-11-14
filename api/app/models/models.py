@@ -2,7 +2,19 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -77,9 +89,11 @@ class Workspace(Base):
     id: Mapped[uuid.UUID] = uuid_pk()
     slug: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(256))
-    # When set, every route for this workspace requires this key. NULL means
-    # the workspace is "open" (no auth) until a key is assigned.
-    api_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # SHA-256 of the legacy workspace (owner) key. When set, every route for
+    # this workspace requires a credential; NULL means the workspace is "open"
+    # (no auth) until a key is assigned. Like actor keys, the raw key is never
+    # stored: it is disclosed once, when minted.
+    api_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tasks: Mapped[list[Task]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
@@ -87,6 +101,10 @@ class Workspace(Base):
     handoffs: Mapped[list[Handoff]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     presences: Mapped[list[Presence]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
     actors: Mapped[list[Actor]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+
+    @property
+    def secured(self) -> bool:
+        return self.api_key_hash is not None
 
 
 class Actor(Base):
@@ -239,3 +257,24 @@ class Presence(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     workspace: Mapped[Workspace] = relationship(back_populates="presences")
+
+
+class Event(Base):
+    """Outbox row for a workspace domain event (task created, decision recorded, ...).
+
+    Written in the *same* transaction as the change it describes, so an event
+    exists if and only if the change committed. ``id`` is a global, monotonically
+    assigned sequence number: WebSocket clients remember the last ``seq`` they saw
+    and reconnect with ``?since=<seq>`` to replay what they missed. Rows are pruned
+    after ``settings.event_retention_hours``; ephemeral events (presence
+    heartbeats) are never stored.
+    """
+
+    __tablename__ = "events"
+
+    # BIGINT on Postgres; SQLite only autoincrements an INTEGER PRIMARY KEY.
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(64))
+    data: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

@@ -47,10 +47,13 @@ def _env_flag(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", _database_url_default()))
-    redis_url: str = field(default_factory=lambda: os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-    # When true (or when redis is unreachable), the event bus falls back to an
-    # in-process bus. Single-instance deployments work without Redis.
-    event_bus_backend: str = field(default_factory=lambda: os.getenv("EVENT_BUS_BACKEND", "redis"))
+    # Real-time fan-out backend: "postgres" (LISTEN/NOTIFY, works across API
+    # instances; the default when DATABASE_URL is Postgres) or "memory"
+    # (in-process only; the default otherwise, e.g. SQLite). If the Postgres
+    # listener can't connect, the bus falls back to in-process.
+    event_bus_backend: str = field(default_factory=lambda: os.getenv("EVENT_BUS_BACKEND", "auto"))
+    # How long replayable events are kept in the outbox for ``/ws?since=``.
+    event_retention_hours: int = field(default_factory=lambda: int(os.getenv("ERID_EVENT_RETENTION_HOURS", "72")))
     # Header clients use to authenticate against a workspace.
     api_key_header: str = "X-API-Key"
     # Whether "open" workspaces (no key at all) are permitted. ON by default,

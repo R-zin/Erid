@@ -61,7 +61,7 @@ export WORKSPACE_API_KEY=...     # only if the workspace is secured
 ```
 
 Requires [`uv`](https://astral.sh/uv) on PATH and the hub API running
-(`docker compose up -d postgres redis api`).
+(`docker compose up -d postgres api`).
 
 ## Commands
 

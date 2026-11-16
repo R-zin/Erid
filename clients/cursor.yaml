@@ -1,9 +1,11 @@
+# Cursor reads MCP servers from .cursor/mcp.json (project) or ~/.cursor/mcp.json
+# (global) under the top-level key `mcpServers`. Equivalent JSON:
+#
+#   { "mcpServers": { "erid": { "url": "http://localhost:8000/mcp",
+#       "headers": { "X-Erid-Workspace": "your-workspace", "X-API-Key": "<key>" } } } }
 mcp:
-  context-hub:
-    command: uv
-    args: [run, python, mcp-server/src/server.py, --transport, stdio]
-    env:
-      API_BASE: http://localhost:8000
-      WORKSPACE_SLUG: your-workspace
-      WORKSPACE_API_KEY: ""
-      WORKSPACE_TOKEN: ""
+  erid:
+    url: http://localhost:8000/mcp
+    headers:
+      X-Erid-Workspace: your-workspace
+      X-API-Key: ""   # omit for an open workspace

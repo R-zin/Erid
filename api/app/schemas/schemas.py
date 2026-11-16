@@ -54,6 +54,9 @@ class DecisionIn(BaseModel):
     title: str = Field(min_length=1, max_length=512)
     reason: str | None = None
     related_files: str | None = None
+    # Ignored when authenticated with a per-actor key/token: the actor's own
+    # name is recorded instead. Honoured for shared credentials (open
+    # workspaces, the legacy workspace key), which identify no one in particular.
     made_by: str | None = None
     task_id: uuid.UUID | None = None  # link this decision to a task
 
@@ -73,6 +76,7 @@ class DecisionOut(BaseModel):
 class TaskIn(BaseModel):
     title: str = Field(min_length=1, max_length=512)
     assigned_to: str | None = None
+    # Same attribution rule as DecisionIn.made_by.
     created_by: str | None = None
     status: TaskStatus = TaskStatus.todo
 
@@ -195,3 +199,9 @@ class ActorCreated(ActorOut):
     """Returned once at minting; the raw API key is shown only here."""
 
     api_key: str | None
+
+
+class SearchResults(BaseModel):
+    query: str
+    decisions: list[DecisionOut]
+    tasks: list[TaskOut]

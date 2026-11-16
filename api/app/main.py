@@ -1,13 +1,39 @@
+import asyncio
+import contextlib
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.routing import Route
 
 from app.api.routes import auth, context, context_misc
 from app.core.settings import settings
+from app.db import session as db_session
 from app.db.session import init_db
+from app.mcp_server import endpoint as mcp_endpoint
+from app.services.errors import ServiceError
+from app.services.event_bus import close_event_bus
+from app.services.events import prune_events
+
+logger = logging.getLogger("context_hub.main")
+
+# How often the outbox is pruned of events older than the retention window.
+PRUNE_INTERVAL_SECS = 3600
+
+
+async def _prune_outbox_forever() -> None:
+    while True:
+        try:
+            async with db_session.AsyncSessionLocal() as db:
+                removed = await prune_events(db)
+            if removed:
+                logger.info("pruned %d expired events from the outbox", removed)
+        except Exception:  # noqa: BLE001 - housekeeping must never take the app down
+            logger.exception("event outbox prune failed")
+        await asyncio.sleep(PRUNE_INTERVAL_SECS)
 
 
 @asynccontextmanager
@@ -15,7 +41,15 @@ async def lifespan(app: FastAPI):
     # Bring the schema up to date. Runs Alembic "upgrade head" for real
     # databases; tests/SQLite create tables directly from the models instead.
     await init_db()
-    yield
+    pruner = asyncio.create_task(_prune_outbox_forever())
+    try:
+        async with mcp_endpoint.lifespan():
+            yield
+    finally:
+        pruner.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pruner
+        await close_event_bus()
 
 
 app = FastAPI(title="AI Context Hub API", lifespan=lifespan)
@@ -31,11 +65,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(ServiceError)
+async def _service_error(_request: Request, exc: ServiceError) -> JSONResponse:
+    """Map domain errors raised by services to their HTTP status."""
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
 app.include_router(context.router, prefix="/api", tags=["context"])
 # /search & /summary live in context_misc, scoped behind Permission.read.
 app.include_router(context_misc.router, prefix="/api", tags=["context_misc"])
 # Social login (OAuth) endpoints — open; they mint the same JWT as /token.
 app.include_router(auth.router, prefix="/api", tags=["auth"])
+
+
+# MCP over Streamable HTTP. A plain Route (not a Mount) so POST /mcp is served
+# directly instead of being redirected to /mcp/. Registered before the SPA
+# catch-all below.
+app.router.routes.append(Route("/mcp", endpoint=mcp_endpoint, methods=["GET", "POST", "DELETE"]))
 
 
 @app.get("/health", tags=["meta"])

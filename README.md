@@ -10,29 +10,27 @@ The MCP tools your editor already has (`workspace_summary`, `create_decision`,
 in one tool is immediately visible in every other tool and on a live dashboard.
 
 ```
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│ Claude Code │  │   Cursor    │  │  Codex CLI  │
-└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-       │   MCP (stdio / streamable-http)  │
-       └────────────────┼────────────────┘
-                        ▼
-              ┌──────────────────┐        ┌──────────┐
-              │   MCP server     │───────▶│ REST API │◀────────┐
-              │ (mcp-server/)    │ HTTP   │  (api/)  │         │
-              └──────────────────┘        └────┬─────┘         │
-                                               │               │
-                              ┌────────────────┼───────────┐   │
-                              ▼                ▼           ▼   │
-                         ┌─────────┐    ┌───────────┐  ┌─────┐│
-                         │Postgres │    │ Redis     │  │ WS  ││
-                         │ (state) │    │ pub/sub   │  │push ││
-                         └─────────┘    └───────────┘  └──┬──┘│
-                                                          ▼   │
-                                                    ┌──────────┐
-                                                    │ web/     │
-                                                    │ dashboard│
-                                                    └──────────┘
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐   ┌───────────────────┐
+│ Claude Code │  │   Cursor    │  │  Codex CLI  │   │ web/ dashboard,   │
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘   │ VS Code, JetBrains│
+       └──── MCP over HTTP (/mcp) ───────┘          └─────────┬─────────┘
+                        │                       REST + WebSocket (/ws?since=)
+                        ▼                                      ▼
+        ┌───────────────────────────────────────────────────────────────┐
+        │ API (api/)   routes ─┬─ MCP endpoint ─┬─ WebSocket stream     │
+        │                      ▼                ▼                       │
+        │            services (app/services): one implementation        │
+        │            of every operation + transactional event outbox    │
+        └──────────────────────────────┬────────────────────────────────┘
+                                       ▼
+                     ┌───────────────────────────────────┐
+                     │ Postgres: state, event outbox,    │
+                     │ LISTEN/NOTIFY fan-out across      │
+                     │ API instances                     │
+                     └───────────────────────────────────┘
 ```
+
+Two moving parts: the API process (run as many as you like) and Postgres.
 
 ## Why
 
@@ -55,8 +53,9 @@ real-time feed, so:
 
 | Dir          | What it is                                                            |
 | ------------ | --------------------------------------------------------------------- |
-| `api/`       | FastAPI + Postgres. State, REST routes, and the WebSocket event feed. |
-| `mcp-server/`| MCP server exposing the state as tools to AI clients (stdio or HTTP). |
+| `api/`       | FastAPI + Postgres. State, REST routes, the WebSocket event feed, and the MCP endpoint at `/mcp`. Routes and MCP tools are thin adapters over `app/services/`. |
+| `api/openapi.json` | The committed API contract; regenerate with `uv run python scripts/export_openapi.py`. |
+| `mcp-server/`| Standalone stdio MCP server (same tools, over REST) for clients that can't speak HTTP MCP. |
 | `mcp-server/src/bridge.py` | stdio JSON-RPC bridge editor plugins spawn (owns all hub I/O). |
 | `editors/vscode/` | VS Code/Cursor extension: live sidebar, quick actions, auto-presence, MCP setup. |
 | `editors/claude-code/` | Claude Code plugin: bundles the MCP server + `/hub:*` slash commands. |
@@ -70,7 +69,7 @@ real-time feed, so:
 ### With Docker Compose
 
 ```bash
-docker compose up -d postgres redis api
+docker compose up -d postgres api
 curl http://localhost:8000/health    # {"status":"ok"}
 open http://localhost:8000/docs      # interactive OpenAPI docs
 ```
@@ -83,7 +82,7 @@ docker compose up -d web            # http://localhost:8080
 
 ### Natively (no Docker)
 
-You need Postgres and Redis running locally, and [`uv`](https://astral.sh/uv):
+You need Postgres running locally, and [`uv`](https://astral.sh/uv):
 
 ```bash
 # one-time: create the database
@@ -92,33 +91,30 @@ createdb erid   # role/password postgres:postgres per docker-compose
 # run the API
 cd api
 DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/erid" \
-REDIS_URL="redis://localhost:6379/0" \
   uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # run the dashboard (proxies /api to :8000)
 cd web && npm install && npm run dev    # http://localhost:5173
 ```
 
-The API creates its tables on startup (a dev convenience; Alembic is the
-roadmap's intended migration tool).
+The API runs the Alembic migrations (`upgrade head`) on startup.
 
 ## Deploy (self-host)
 
 The `docker-compose.yml` stack is healthchecked and start-ordered:
-`postgres`/`redis` expose `pg_isready`/`redis-cli ping` healthchecks, and
-`api` (which waits on both with `service_healthy`) probes its own `/health`
+`postgres` exposes a `pg_isready` healthcheck, and
+`api` (which waits on it with `service_healthy`) probes its own `/health`
 endpoint using Python baked into its slim image (no `curl` dependency). The
 `web` service waits for `api` to be healthy before starting. Bring the whole
 web stack up with:
 
 ```bash
-docker compose up -d postgres redis api web
+docker compose up -d postgres api web
 ```
 
-Only `api` (`:8000`) and `web` (`:8080`) publish on all interfaces. Postgres and
-Redis are bound to `127.0.0.1` — both run with default/no credentials, so they
-must stay off-box; the `api` container reaches them over the compose network
-regardless. Host tools (`psql`, `redis-cli`) still work from the machine itself.
+Only `api` (`:8000`) and `web` (`:8080`) publish on all interfaces. Postgres is
+bound to `127.0.0.1`: it runs with default credentials, so it must stay
+off-box; the `api` container reaches it over the compose network regardless. Host tools (`psql`) still work from the machine itself.
 
 ### Configuration (.env)
 
@@ -174,8 +170,22 @@ docker compose --profile mcp up -d
 
 ## Using it from an AI tool
 
-Point your tool's MCP config at the server. `clients/` has ready examples for
-Claude Code, Cursor, and Codex. For Claude Code:
+The API serves MCP itself, over Streamable HTTP at `/mcp`. Point your tool at
+the URL; there's nothing to install or run locally. For Claude Code:
+
+```bash
+claude mcp add --transport http erid http://localhost:8000/mcp \
+  --header "X-Erid-Workspace: your-workspace" \
+  --header "X-API-Key: $KEY"          # omit for an open workspace
+```
+
+`X-Erid-Workspace` (or `?workspace=` on the URL) sets the default workspace so
+tools don't need a slug each call. Authenticate with `X-API-Key` or
+`Authorization: Bearer <jwt>`; every tool enforces the same permission as the
+matching REST route. `clients/` has configs for Claude Code, Cursor, and Codex.
+
+For a client that only speaks stdio MCP, `mcp-server/src/server.py` exposes the
+same tools over REST (a test keeps the two surfaces identical):
 
 ```bash
 claude mcp add context-hub \
@@ -183,9 +193,6 @@ claude mcp add context-hub \
   --env WORKSPACE_SLUG=your-workspace \
   -- uv run python mcp-server/src/server.py --transport stdio
 ```
-
-`WORKSPACE_SLUG` sets a default workspace so tools don't need a slug each call.
-`WORKSPACE_API_KEY` (optional) authenticates against a secured workspace.
 
 Then the tools are available in-session: `workspace_summary`, `search_context`,
 `current_tasks`, `create_task`, `update_task`, `create_decision`,
@@ -282,8 +289,9 @@ Workspaces are **open** (no auth) until secured. Once secured, requests
 authenticate as a **principal** carrying fine-grained **permissions**. Three
 credential shapes are accepted:
 
-- **Legacy workspace key** — the original shared `workspaces.api_key`; maps to
-  full access (owner). Existing setups keep working.
+- **Legacy workspace key** — the original shared workspace key; maps to full
+  access (owner). Only its SHA-256 is stored, and it's disclosed once, when
+  minted (provision, `/secure`, `rotate-key`).
 - **Per-actor key** — each actor (person/bot) gets its own key, scoped by role +
   grants. Only its SHA-256 is stored; it's disclosed **once** at minting.
 - **JWT (Ed25519)** — exchange a key for a short-lived bearer token at the login
@@ -307,6 +315,11 @@ Set **`ERID_ALLOW_OPEN_WORKSPACES=0`** to turn all of that off:
 
 Already have keyless workspaces from before? Claim their keys via `/secure`
 while the flag is still on, then flip it off.
+
+**Attribution.** A per-actor key or token *is* an identity, so writes made with
+one are always attributed to that actor; a `created_by`/`made_by` in the request
+is ignored. Shared credentials (the legacy workspace key, an open workspace)
+identify no one in particular, so the claimed author is kept.
 
 **Roles:** `reader` (read-only) → `writer` (read + write tasks/decisions/
 presence) → `owner` (writer + mint/revoke keys, manage actors). Grants give
@@ -374,7 +387,8 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | GET    | `/workspaces/{slug}/actors`   | admin| list actors (never keys)         |
 | DELETE | `/workspaces/{slug}/actors/{id}`| admin | revoke an actor                |
 | POST   | `/workspaces/{slug}/token`    | key* | exchange a key for a JWT         |
-| WS     | `/workspaces/{slug}/ws`       | key* | real-time event stream           |
+| WS     | `/workspaces/{slug}/ws`       | key* | real-time event stream (`?since=<seq>` to resume) |
+| POST   | `/mcp` (no `/api` prefix)     | key* | MCP over Streamable HTTP (`X-Erid-Workspace`) |
 
 \* only when the workspace has a key configured; open workspaces skip auth —
 unless `ERID_ALLOW_OPEN_WORKSPACES=0`, which makes an unknown slug 404 and a
@@ -387,23 +401,45 @@ route enforces a specific permission (`read`/`write_tasks`/`write_decisions`/
 
 ## Real-time events
 
-Mutations publish events (`task_created`, `task_updated`, `decision_created`,
-`presence_updated`) onto the workspace's stream. The event bus
-(`api/app/services/event_bus.py`) uses **Redis pub/sub** so updates fan out
-across multiple API instances; if Redis is unreachable it falls back to an
-in-process bus (single-instance dev/tests need no broker). Select with
-`EVENT_BUS_BACKEND=redis|memory`.
+Mutations publish events (`task_created`, `task_updated`, `task_deleted`,
+`decision_created`, `handoff_created`, `handoff_updated`, `presence_updated`, …)
+onto the workspace's stream. Each frame is
+`{"workspace", "type", "data", "ts", "seq"}`.
 
-The dashboard subscribes at `GET /api/workspaces/{slug}/ws` and re-renders live.
+**Transactional outbox** (`api/app/services/events.py`). A service writes the
+event to the `events` table in the *same transaction* as the change, so an event
+exists exactly when its change committed. The row's id is the event's `seq`.
+Presence heartbeats are live-only (no `seq`): storing them would fill the outbox
+for no benefit. Rows are pruned after `ERID_EVENT_RETENTION_HOURS` (default 72).
+
+**Fan-out** (`api/app/services/event_bus.py`). On Postgres, producers call
+`pg_notify` inside that transaction, and Postgres delivers it only on commit, to
+every API instance's `LISTEN` connection. So there's no publish-after-commit
+window to lose an event in, and no extra broker. Events too large for a
+notification travel by reference and are loaded from the outbox. With SQLite
+(tests) the bus is in-process. Override with `EVENT_BUS_BACKEND=postgres|memory`.
+
+**Resuming.** Clients remember the highest `seq` they've seen and reconnect with
+`/ws?since=<seq>`: the server replays what they missed, then streams live. If it
+can't (more than 500 events behind, or the gap was pruned) it sends
+`{"type": "resync_required"}` first and the client reloads over REST. The
+dashboard does this; it only falls back to a full reload when it has no `seq` yet.
 
 ## Testing
 
 ```bash
 uv run pytest            # API routes + WebSocket + MCP tool round-trip
+
+# The same suite against Postgres (schema built by the real Alembic migrations;
+# also runs the LISTEN/NOTIFY bus and migration tests that SQLite skips):
+ERID_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/erid_test \
+  uv run pytest
 ```
 
-`tests/` runs the app against an isolated in-memory SQLite DB (no Postgres
-needed) and includes a live WebSocket-over-uvicorn test. `mcp-server/tests/`
+By default `tests/` runs the app against an isolated in-memory SQLite DB (no
+Postgres needed); CI runs it on both. `tests/test_contract.py` fails if
+`api/openapi.json` is stale or if `mcp-server/src/client.py` / `web/src/api.js`
+call a route the API doesn't serve. `mcp-server/tests/`
 boots a real API subprocess and drives the MCP client end-to-end; set
 `ERID_LIVE_API` to target an already-running server instead.
 
@@ -414,16 +450,16 @@ Environment variables (see `api/app/core/settings.py`, `mcp-server/src/client.py
 | Var                 | Default                                            | Used by   |
 | ------------------- | -------------------------------------------------- | --------- |
 | `DATABASE_URL`      | `postgresql+asyncpg://postgres:postgres@localhost:5432/erid` | api |
-| `REDIS_URL`         | `redis://localhost:6379/0`                         | api       |
-| `EVENT_BUS_BACKEND` | `redis` (falls back to in-process if unreachable)  | api       |
+| `EVENT_BUS_BACKEND` | `auto`: `postgres` (LISTEN/NOTIFY) on Postgres, else `memory` | api |
+| `ERID_EVENT_RETENTION_HOURS` | `72` — how long `/ws?since=` can replay | api |
 | `CORS_ORIGINS`      | `http://localhost:5173,http://localhost:8000`      | api       |
 | `ERID_ALLOW_OPEN_WORKSPACES` | `1` — set `0` on public deployments (see [Authentication](#closing-off-open-workspaces-public-deployments)) | api |
 | `API_BASE`          | `http://localhost:8000`                            | mcp-server|
 | `WORKSPACE_SLUG`    | —                                                  | mcp-server|
 | `WORKSPACE_API_KEY` | —                                                  | mcp-server|
 
-Docker Compose injects `DATABASE_URL`/`REDIS_URL` pointing at the container
-hosts; the defaults target local services for native dev.
+Docker Compose injects `DATABASE_URL` pointing at the container host; the
+defaults target a local Postgres for native dev.
 
 ## Roadmap
 
@@ -431,7 +467,7 @@ Done (this iteration):
 
 - [x] REST API for tasks / decisions / presence + summary + search
 - [x] All 9 MCP tools wired end-to-end and config for Claude/Cursor/Codex
-- [x] Redis-backed event bus (in-process fallback) + WebSocket stream
+- [x] Event bus + WebSocket stream (now Postgres LISTEN/NOTIFY with a transactional outbox; Redis removed)
 - [x] Single API-key-per-workspace auth
 - [x] Live React dashboard (presence, tasks, decisions)
 - [x] Integration tests (API routes, WebSocket, MCP round-trip)
@@ -453,6 +489,8 @@ Done (this iteration):
 - [x] Dashboard decision-create UI
 - [x] Deploy/CI verification of the compose stack (healthchecked `docker-compose.yml`, `infra/deploy.sh`, `compose-verify` job)
 - [x] **Session handoffs** — durable `handoffs` resource (summary, files changed, commands run, blockers, next action, branch/task/recipient links) with an `open → acknowledged → resolved` lifecycle, REST CRUD + lifecycle endpoints, `write_handoffs` permission, `handoff_created/updated/deleted` WS events, MCP tools (`create_handoff`, `recent_handoffs`, `acknowledge_handoff`, `resolve_handoff`), a `workspace://{slug}/handoffs` resource, a `catch_up` prompt that briefs on open handoffs, dashboard list/create/pick-up/resolve UI, and `open_handoff_count` in the workspace summary.
+
+- [x] **Architecture consolidation** — service layer shared by REST and MCP; MCP served in-process at `/mcp`; transactional event outbox with `seq` and `/ws?since=` replay; Redis replaced by Postgres `LISTEN/NOTIFY`; hashed workspace keys; actor-bound attribution; test suite runs on Postgres in CI; OpenAPI contract checks for the hand-written clients.
 
 All roadmap items complete.
 

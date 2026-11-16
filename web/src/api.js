@@ -63,15 +63,18 @@ export function makeClient({ slug, credential, authType = 'key', base = '' }) {
     deleteDecision: (id) => del(`/decisions/${id}`),
     deleteHandoff: (id) => del(`/handoffs/${id}`),
 
-    socketUrl() {
+    // `since` (optional): the last event `seq` seen; the server replays
+    // everything after it before streaming live events.
+    socketUrl(since) {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
       const host = base ? new URL(base).host : window.location.host
-      let q = ''
+      const params = []
       if (credential) {
         const param = authType === 'token' ? 'token' : 'api_key'
-        q = `?${param}=${encodeURIComponent(credential)}`
+        params.push(`${param}=${encodeURIComponent(credential)}`)
       }
-      return `${proto}://${host}${root}/ws${q}`
+      if (since != null) params.push(`since=${encodeURIComponent(since)}`)
+      return `${proto}://${host}${root}/ws${params.length ? `?${params.join('&')}` : ''}`
     },
   }
 }

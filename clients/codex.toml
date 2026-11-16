@@ -1,13 +1,17 @@
-# Codex CLI MCP config for the AI Context Hub.
-# Merge into your Codex config (e.g. ~/.codex/config.toml). The server reads its
-# settings from these env vars (see clients/README.md for what each means).
+# Codex CLI MCP config for Erid. Merge into ~/.codex/config.toml.
+# The API serves MCP over Streamable HTTP at /mcp.
 
-[mcp_servers.context-hub]
-command = "uv"
-args = ["run", "python", "mcp-server/src/server.py", "--transport", "stdio"]
+[mcp_servers.erid]
+url = "http://localhost:8000/mcp"
+http_headers = { "X-Erid-Workspace" = "your-workspace" }
+# For a secured workspace, send the key from an env var rather than the file:
+env_http_headers = { "X-API-Key" = "ERID_API_KEY" }
 
-[mcp_servers.context-hub.env]
-API_BASE = "http://localhost:8000"
-WORKSPACE_SLUG = "your-workspace"
-WORKSPACE_API_KEY = ""
-WORKSPACE_TOKEN = ""
+# stdio alternative (runs the standalone server from a checkout of this repo):
+# [mcp_servers.erid]
+# command = "uv"
+# args = ["run", "python", "mcp-server/src/server.py", "--transport", "stdio"]
+# [mcp_servers.erid.env]
+# API_BASE = "http://localhost:8000"
+# WORKSPACE_SLUG = "your-workspace"
+# WORKSPACE_API_KEY = ""

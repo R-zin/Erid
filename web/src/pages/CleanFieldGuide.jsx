@@ -108,14 +108,14 @@ export default function CleanFieldGuide({ onNavigateWorkspace }) {
                 Zero-Config Multi-Client Quickstart
               </h2>
               <p style={{ fontSize: 15, lineHeight: 1.6, color: 'var(--on-surface-variant)' }}>
-                Erid bridges disparate agent sessions into a unified real-time context store. When you launch Erid, a local Postgres (state), Redis (pub/sub), and FastAPI service start instantly.
+                Erid bridges disparate agent sessions into a unified real-time context store. When you launch Erid, a local Postgres (state + LISTEN/NOTIFY event fan-out) and a FastAPI service start instantly.
               </p>
 
               <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: 20, margin: '24px 0 10px', color: 'var(--primary)' }}>
                 1. Native Launch (No Docker)
               </h3>
               <p style={{ fontSize: 13, color: 'var(--on-surface-variant)' }}>
-                Requirements: Postgres and Redis running locally, and <code className="agent-tag">uv</code>.
+                Requirements: Postgres running locally, and <code className="agent-tag">uv</code>.
               </p>
               <div style={{ background: 'var(--surface-container)', padding: 16, borderRadius: 6, border: 'var(--border-hairline)', fontFamily: 'var(--font-mono)', fontSize: 12, margin: '8px 0 16px', lineHeight: 1.6 }}>
                 <span className="muted"># Start the REST API &amp; WebSocket bus</span>
@@ -127,7 +127,7 @@ export default function CleanFieldGuide({ onNavigateWorkspace }) {
                 </span>
                 <br />
                 <span style={{ color: 'var(--primary)', fontWeight: 600 }}>
-                  REDIS_URL="redis://localhost:6379/0" uv run uvicorn app.main:app --port 8000
+                  uv run uvicorn app.main:app --port 8000
                 </span>
               </div>
 
@@ -135,7 +135,7 @@ export default function CleanFieldGuide({ onNavigateWorkspace }) {
                 2. Containerized Launch
               </h3>
               <div style={{ background: 'var(--surface-container)', padding: 16, borderRadius: 6, border: 'var(--border-hairline)', fontFamily: 'var(--font-mono)', fontSize: 12, margin: '8px 0 16px' }}>
-                <span style={{ color: 'var(--primary)', fontWeight: 600 }}>docker compose up -d postgres redis api web</span>
+                <span style={{ color: 'var(--primary)', fontWeight: 600 }}>docker compose up -d postgres api web</span>
               </div>
             </div>
           )}
@@ -159,9 +159,9 @@ export default function CleanFieldGuide({ onNavigateWorkspace }) {
                   </p>
                 </div>
                 <div style={{ background: 'var(--surface-container)', padding: 16, borderRadius: 6, border: 'var(--border-hairline)' }}>
-                  <h4 style={{ fontFamily: 'var(--font-serif)', fontSize: 18, margin: '0 0 6px', color: 'var(--primary)' }}>Redis (Pub/Sub)</h4>
+                  <h4 style={{ fontFamily: 'var(--font-serif)', fontSize: 18, margin: '0 0 6px', color: 'var(--primary)' }}>Postgres LISTEN/NOTIFY (Events)</h4>
                   <p style={{ fontSize: 13, color: 'var(--on-surface-variant)', margin: 0 }}>
-                    Broadcasts mutations with sub-millisecond latency to all connected editor bridges and WebSockets.
+                    Broadcasts each change when its transaction commits to every API instance, editor bridge, and WebSocket. Missed events replay with ?since=.
                   </p>
                 </div>
               </div>

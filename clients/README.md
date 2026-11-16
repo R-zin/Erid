@@ -1,12 +1,19 @@
-# AI Context Hub — Client Setup
+# Erid — Client Setup
 
-Point your AI tool's MCP config at `mcp-server/src/server.py`. The server reads
-its config from environment variables:
+The API serves MCP over **Streamable HTTP at `/mcp`**, so an AI tool connects
+by URL with nothing installed locally. Two headers configure it:
 
-- `API_BASE` — REST API base URL (default `http://localhost:8000`)
-- `WORKSPACE_SLUG` — default workspace so tools don't need a slug each call
-- `WORKSPACE_API_KEY` — workspace or per-actor API key if the workspace is secured
-- `WORKSPACE_TOKEN` — optional JWT access token (takes precedence over the key)
+- `X-Erid-Workspace` — default workspace so tools don't need a slug each call
+  (or append `?workspace=<slug>` to the URL)
+- `X-API-Key: <key>` or `Authorization: Bearer <jwt>` — only for a secured workspace
+
+Every tool enforces the same permission as the matching REST route, and writes
+made with a per-actor key are attributed to that actor.
+
+**stdio alternative.** For a client that can only launch a local process,
+`mcp-server/src/server.py` exposes the identical tool set over REST. It reads
+`API_BASE`, `WORKSPACE_SLUG`, `WORKSPACE_API_KEY`, and `WORKSPACE_TOKEN` from the
+environment; the stdio snippets below show it.
 
 ## Authentication
 
@@ -34,13 +41,19 @@ Set `WORKSPACE_API_KEY=$ACTOR_KEY` (long-lived) or `WORKSPACE_TOKEN=...`
 ## Claude Code
 
 ```bash
+claude mcp add --transport http erid http://localhost:8000/mcp \
+  --header "X-Erid-Workspace: your-workspace" \
+  --header "X-API-Key: $ERID_API_KEY"
+```
+
+Or merge `clients/claude_code.json` into your settings. stdio alternative:
+
+```bash
 claude mcp add context-hub \
   --env API_BASE=http://localhost:8000 \
   --env WORKSPACE_SLUG=your-workspace \
   -- uv run python mcp-server/src/server.py --transport stdio
 ```
-
-Or merge `clients/claude_code.json` into your settings.
 
 **In-repo plugin (alternative).** Instead of the global server above, you can install the
 bundled plugin from [`editors/claude-code/`](../editors/claude-code) — it registers this same
@@ -57,7 +70,7 @@ this repo).
 
 ## Cursor
 
-In Cursor MCP settings, add the command from `clients/cursor.yaml`:
+Add the server from `clients/cursor.yaml` (URL + headers). stdio alternative:
 
 ```
 uv run python mcp-server/src/server.py --transport stdio
@@ -69,7 +82,23 @@ Cursor reads MCP config from `.cursor/mcp.json` (project) or `~/.cursor/mcp.json
 ## VS Code
 
 VS Code reads workspace MCP servers from `.vscode/mcp.json`, top-level key
-`servers` (note: **`servers`**, not `mcpServers`):
+`servers` (note: **`servers`**, not `mcpServers`). Over HTTP, with the key
+prompted for rather than stored in the file:
+
+```json
+{
+  "inputs": [{ "id": "erid-key", "type": "promptString", "description": "Erid API key", "password": true }],
+  "servers": {
+    "erid": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "headers": { "X-Erid-Workspace": "your-workspace", "X-API-Key": "${input:erid-key}" }
+    }
+  }
+}
+```
+
+stdio alternative:
 
 ```json
 {
@@ -96,8 +125,17 @@ values blank for you to fill in).
 
 Codex CLI has no plugin/extension UI — its only integration surface is MCP
 config, so this is the whole "extension" for Codex. Merge `clients/codex.toml`
-into your Codex config (`~/.codex/config.toml`). It points the stdio command at
-`mcp-server/src/server.py` with the same env vars as above.
+into your Codex config (`~/.codex/config.toml`). It points Codex at the `/mcp`
+URL and reads the key from the `ERID_API_KEY` environment variable:
+
+```toml
+[mcp_servers.erid]
+url = "http://localhost:8000/mcp"
+http_headers = { "X-Erid-Workspace" = "your-workspace" }
+env_http_headers = { "X-API-Key" = "ERID_API_KEY" }
+```
+
+stdio alternative (run Codex from the repo root so the relative path resolves):
 
 ```toml
 [mcp_servers.context-hub]
@@ -111,11 +149,11 @@ WORKSPACE_API_KEY = ""
 WORKSPACE_TOKEN = ""
 ```
 
-Run Codex from the repo root so the relative `mcp-server/src/server.py` path resolves.
-
 Once connected, the tools `workspace_summary`, `search_context`,
-`current_tasks`, `create_task`, `update_task`, `create_decision`,
-`task_decisions`, `recent_decisions`, `active_developers`, and `update_presence`
-are available, plus read-only resources (`workspace://{slug}/summary`,
-`.../tasks`, `.../decisions`, `.../presence`) and the prompts
+`current_tasks`, `create_task`, `update_task`, `delete_task`, `create_decision`,
+`delete_decision`, `task_decisions`, `recent_decisions`, `active_developers`,
+`update_presence`, `list_workspaces`, `create_handoff`, `recent_handoffs`,
+`acknowledge_handoff`, and `resolve_handoff` are available, plus read-only
+resources (`workspace://index`, `workspace://{slug}/summary`, `.../tasks`,
+`.../decisions`, `.../handoffs`, `.../presence`) and the prompts
 `summarize_workspace`, `standup_report`, and `catch_up`.

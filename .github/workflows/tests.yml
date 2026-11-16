@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Check code formatting
-        run: uv run ruff format --check api mcp-server tests .github/scripts
+        run: uv run ruff format --check api mcp-server tests
 
   ruff-check:
     name: ruff-check
@@ -46,7 +46,7 @@ jobs:
           enable-cache: true
 
       - name: Lint Python codebase
-        run: uv run ruff check api mcp-server tests .github/scripts
+        run: uv run ruff check api mcp-server tests
 
   pytest:
     name: pytest
@@ -81,7 +81,7 @@ jobs:
         run: uv run pytest -v --tb=short
 
   integration:
-    name: integration (Postgres + Redis)
+    name: integration (Postgres)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -98,19 +98,9 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/erid
-      REDIS_URL: redis://localhost:6379/0
-      EVENT_BUS_BACKEND: redis
+      EVENT_BUS_BACKEND: postgres
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -123,6 +113,15 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen
+
+      # Same suite as the pytest job, but against real Postgres: the schema is
+      # built by the Alembic migrations, so enum/FTS/upsert drift is caught here.
+      - name: Run test suite (Postgres)
+        env:
+          ERID_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/erid
+          # The suite drives the bus per-test; the Postgres bus has its own tests.
+          EVENT_BUS_BACKEND: memory
+        run: uv run pytest -v --tb=short
 
       - name: Start API against live services
         working-directory: api
@@ -309,7 +308,7 @@ jobs:
         run: docker compose build
 
       - name: Start stack
-        run: docker compose up -d postgres redis api web
+        run: docker compose up -d postgres api web
 
       - name: Wait for API to become healthy
         run: |

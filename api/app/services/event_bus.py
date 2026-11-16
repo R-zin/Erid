@@ -1,20 +1,19 @@
-"""Workspace event bus.
+"""Workspace event bus: fans committed domain events out to WebSocket subscribers.
 
-Publishes domain events (task created, decision recorded, presence changed,
-...) so WebSocket subscribers can stream real-time updates to dashboards.
-
-Two backends share one interface:
+Two backends share one interface (``publish`` / ``subscribe``):
 
 - ``InProcessEventBus``: delivers events to subscribers in the current process.
-  Zero dependencies — used as a fallback when Redis is unavailable and in
-  single-instance deployments.
-- ``RedisEventBus``: pub/sub over Redis so events fan out across *multiple*
-  API instances. Any instance that handles a mutation publishes; every
-  instance's WebSocket subscribers receive it.
+  Zero dependencies; used with SQLite, in tests, and as the fallback.
+- ``PostgresEventBus``: cross-instance fan-out over Postgres ``LISTEN/NOTIFY``.
+  Producers call ``pg_notify`` *inside* the transaction that makes the change
+  (see :mod:`app.services.events`), and Postgres only delivers a notification
+  when that transaction commits. So a subscriber never sees an event for a change
+  that rolled back, and a committed change can't lose its event to a crash
+  between "commit" and "publish". Each API process holds one listening
+  connection and fans notifications out to its own subscribers in-process.
 
-Selection lives in ``get_event_bus()``: Redis is preferred, with an automatic
-fallback to the in-process bus if Redis can't be reached (so local dev and
-tests run without a broker).
+This replaces the earlier Redis pub/sub backend: Postgres is already a hard
+dependency, so Redis was a second stateful service that bought nothing.
 """
 
 from __future__ import annotations
@@ -26,16 +25,20 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-import redis.asyncio as aioredis
 from app.core.settings import settings
 
 logger = logging.getLogger("context_hub.event_bus")
 
-CHANNEL_PREFIX = "context-hub:workspace:"
+# One channel for every workspace; the payload names the workspace. Channel
+# names are identifiers in Postgres, so keep it simple and lowercase.
+NOTIFY_CHANNEL = "erid_events"
+# pg_notify payloads must be < 8000 bytes. Larger envelopes are sent as a
+# reference ({"workspace", "ref": seq}) and the listener loads the outbox row.
+NOTIFY_INLINE_LIMIT = 7000
 
-
-def _channel(workspace_slug: str) -> str:
-    return f"{CHANNEL_PREFIX}{workspace_slug}"
+# Reconnect backoff for the LISTEN connection.
+_BACKOFF_MIN = 1.0
+_BACKOFF_MAX = 30.0
 
 
 def _offer(queue: asyncio.Queue, payload: dict[str, Any]) -> None:
@@ -43,11 +46,9 @@ def _offer(queue: asyncio.Queue, payload: dict[str, Any]) -> None:
 
     A subscriber that stops draining its queue (a WebSocket client on a slow or
     half-open connection) must not be able to break anyone else: an unguarded
-    ``put_nowait`` raises ``QueueFull``, which on the in-process bus aborts
-    delivery to the *remaining* subscribers mid-publish, and on the Redis bus
-    kills that subscription's ``_pump`` task while its socket stays open — so it
-    silently receives nothing from then on. Dropping the event for the one slow
-    subscriber, loudly, is the containable failure.
+    ``put_nowait`` raises ``QueueFull`` and would abort delivery to the remaining
+    subscribers mid-publish. Dropping the event for the one slow subscriber,
+    loudly, is the containable failure; that client can resync with ``?since=``.
     """
     try:
         queue.put_nowait(payload)
@@ -62,112 +63,195 @@ def _offer(queue: asyncio.Queue, payload: dict[str, Any]) -> None:
 class InProcessEventBus:
     """Simple fan-out bus confined to the current process."""
 
+    #: Producers must call :meth:`publish` after commit (no transactional hook).
+    transactional = False
+
     def __init__(self) -> None:
-        self._subscribers: set[asyncio.Queue] = set()
-        self._lock = asyncio.Lock()
+        self._subscribers: dict[str, set[asyncio.Queue]] = {}
 
     async def publish(self, workspace_slug: str, event: dict[str, Any]) -> None:
-        payload = {"workspace": workspace_slug, **event}
-        async with self._lock:
-            subscribers = list(self._subscribers)
-        for queue in subscribers:
-            # Deliver only to subscribers interested in this workspace (each
-            # records the slug it cares about as an attribute on its queue).
-            if getattr(queue, "workspace_slug", None) == workspace_slug:
+        self.deliver(workspace_slug, {"workspace": workspace_slug, **event})
+
+    def deliver(self, workspace_slug: str, payload: dict[str, Any]) -> None:
+        try:
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            current = None
+        for queue in list(self._subscribers.get(workspace_slug, ())):
+            loop = queue.loop  # type: ignore[attr-defined]
+            if loop is current:
                 _offer(queue, payload)
+            elif not loop.is_closed():
+                # asyncio.Queue isn't thread-safe: a put from another thread's
+                # loop wouldn't wake this subscriber's loop, so the event would
+                # sit until something else did. Hand it over on the owner loop.
+                loop.call_soon_threadsafe(_offer, queue, payload)
 
     @contextlib.asynccontextmanager
     async def subscribe(self, workspace_slug: str) -> AsyncIterator[asyncio.Queue]:
-        queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
-        queue.workspace_slug = workspace_slug  # type: ignore[attr-defined]
-        async with self._lock:
-            self._subscribers.add(queue)
-        try:
-            yield queue
-        finally:
-            async with self._lock:
-                self._subscribers.discard(queue)
-
-
-class RedisEventBus:
-    """Pub/sub fan-out backed by Redis, for multi-instance deployments."""
-
-    def __init__(self, redis_url: str) -> None:
-        self._redis_url = redis_url
-        self._redis: aioredis.Redis | None = None
-
-    async def _conn(self) -> aioredis.Redis:
-        if self._redis is None:
-            self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
-        return self._redis
-
-    async def ping(self) -> bool:
-        try:
-            conn = await self._conn()
-            return bool(await conn.ping())
-        except Exception:  # noqa: BLE001 - any connection error triggers fallback
-            return False
-
-    async def publish(self, workspace_slug: str, event: dict[str, Any]) -> None:
-        conn = await self._conn()
-        payload = json.dumps({"workspace": workspace_slug, **event})
-        await conn.publish(_channel(workspace_slug), payload)
-
-    @contextlib.asynccontextmanager
-    async def subscribe(self, workspace_slug: str) -> AsyncIterator[asyncio.Queue]:
-        conn = await self._conn()
-        pubsub = conn.pubsub()
-        await pubsub.subscribe(_channel(workspace_slug))
         queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         queue.workspace_slug = workspace_slug  # type: ignore[attr-defined]  # for _offer's log line
-        listener = asyncio.create_task(self._pump(pubsub, queue))
+        queue.loop = asyncio.get_running_loop()  # type: ignore[attr-defined]  # owner loop, for deliver()
+        self._subscribers.setdefault(workspace_slug, set()).add(queue)
         try:
             yield queue
         finally:
-            listener.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await listener
-            await pubsub.unsubscribe(_channel(workspace_slug))
-            await pubsub.aclose()
+            subs = self._subscribers.get(workspace_slug)
+            if subs is not None:
+                subs.discard(queue)
+                if not subs:
+                    self._subscribers.pop(workspace_slug, None)
 
-    @staticmethod
-    async def _pump(pubsub: aioredis.client.PubSub, queue: asyncio.Queue) -> None:
+
+def asyncpg_dsn(database_url: str) -> str:
+    """Turn a SQLAlchemy ``postgresql+asyncpg://`` URL into a plain asyncpg DSN."""
+    return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
+class PostgresEventBus(InProcessEventBus):
+    """Cross-instance fan-out over Postgres ``LISTEN/NOTIFY``.
+
+    ``publish`` is only used for events that are not tied to a transaction; the
+    normal path is :func:`app.services.events.emit`, which issues ``pg_notify``
+    in the producer's own transaction. Every instance (including the producer)
+    receives the notification on its listener and delivers it locally.
+    """
+
+    transactional = True
+
+    def __init__(self, database_url: str) -> None:
+        super().__init__()
+        self._dsn = asyncpg_dsn(database_url)
+        self._conn = None
+        self._supervisor: asyncio.Task | None = None
+        self._ready = asyncio.Event()
+
+    async def start(self, timeout: float = 5.0) -> bool:
+        """Start the listener; return ``False`` if Postgres can't be reached."""
+        import asyncpg
+
+        try:
+            await self._connect(asyncpg)
+        except Exception as exc:  # noqa: BLE001 - any connect failure means fallback
+            logger.warning("event bus: Postgres listener could not connect (%s)", exc)
+            return False
+        self._supervisor = asyncio.create_task(self._supervise(asyncpg))
+        return True
+
+    async def _connect(self, asyncpg) -> None:
+        conn = await asyncpg.connect(self._dsn)
+        await conn.add_listener(NOTIFY_CHANNEL, self._on_notify)
+        lost = asyncio.Event()
+        conn.add_termination_listener(lambda _c: lost.set())
+        self._conn = conn
+        self._lost = lost
+        self._ready.set()
+
+    async def _supervise(self, asyncpg) -> None:
+        """Reconnect the LISTEN connection with backoff whenever it drops."""
+        backoff = _BACKOFF_MIN
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-            if message and message.get("type") == "message":
+            await self._lost.wait()
+            self._ready.clear()
+            logger.warning("event bus: lost Postgres listener connection; reconnecting")
+            while True:
+                await asyncio.sleep(backoff)
                 try:
-                    data = json.loads(message["data"])
-                except ValueError, TypeError:
-                    continue
-                _offer(queue, data)
-            else:
-                # Yield to the event loop so cancellation is responsive.
-                await asyncio.sleep(0.01)
+                    await self._connect(asyncpg)
+                    backoff = _BACKOFF_MIN
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("event bus: reconnect failed (%s)", exc)
+                    backoff = min(backoff * 2, _BACKOFF_MAX)
+
+    async def close(self) -> None:
+        if self._supervisor is not None:
+            self._supervisor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._supervisor
+        if self._conn is not None:
+            with contextlib.suppress(Exception):
+                await self._conn.close()
+
+    def _on_notify(self, _conn, _pid: int, _channel: str, payload: str) -> None:
+        try:
+            message = json.loads(payload)
+        except ValueError:
+            return
+        slug = message.get("workspace")
+        if not slug or slug not in self._subscribers:
+            return  # nobody here cares; skip the outbox read for referenced events
+        if "ref" in message:
+            asyncio.get_running_loop().create_task(self._deliver_ref(slug, int(message["ref"])))
+        else:
+            self.deliver(slug, message)
+
+    async def _deliver_ref(self, slug: str, seq: int) -> None:
+        from app.services.events import load_envelope
+
+        envelope = await load_envelope(slug, seq)
+        if envelope is not None:
+            self.deliver(slug, envelope)
+
+    async def publish(self, workspace_slug: str, event: dict[str, Any]) -> None:
+        payload = notify_payload({"workspace": workspace_slug, **event})
+        await self._ready.wait()
+        await self._conn.execute("SELECT pg_notify($1, $2)", NOTIFY_CHANNEL, payload)
 
 
-_bus: InProcessEventBus | RedisEventBus | None = None
+def notify_payload(envelope: dict[str, Any]) -> str:
+    """Serialize an envelope for ``pg_notify``, by reference if it's too large."""
+    raw = json.dumps(envelope, separators=(",", ":"), default=str)
+    if len(raw.encode()) <= NOTIFY_INLINE_LIMIT or envelope.get("seq") is None:
+        return raw
+    return json.dumps({"workspace": envelope["workspace"], "ref": envelope["seq"]})
 
 
-async def get_event_bus() -> InProcessEventBus | RedisEventBus:
-    """Return the shared event bus, choosing Redis with in-process fallback."""
+_bus: InProcessEventBus | None = None
+
+
+def _wanted_backend() -> str:
+    backend = settings.event_bus_backend.strip().lower()
+    if backend in ("postgres", "memory"):
+        return backend
+    if backend not in ("", "auto"):
+        logger.warning("event bus: unknown EVENT_BUS_BACKEND=%r; choosing automatically", backend)
+    return "postgres" if settings.database_url.startswith("postgresql") else "memory"
+
+
+async def get_event_bus() -> InProcessEventBus:
+    """Return the shared event bus, choosing Postgres with in-process fallback."""
     global _bus
     if _bus is not None:
         return _bus
 
-    if settings.event_bus_backend == "redis":
-        candidate = RedisEventBus(settings.redis_url)
-        if await candidate.ping():
-            logger.info("event bus: using Redis backend (%s)", settings.redis_url)
+    if _wanted_backend() == "postgres":
+        candidate = PostgresEventBus(settings.database_url)
+        if await candidate.start():
+            logger.info("event bus: using Postgres LISTEN/NOTIFY")
             _bus = candidate
             return _bus
-        logger.warning("event bus: Redis unreachable; falling back to in-process bus")
+        logger.warning("event bus: falling back to in-process bus (single instance only)")
 
     logger.info("event bus: using in-process backend")
     _bus = InProcessEventBus()
     return _bus
 
 
+async def close_event_bus() -> None:
+    """Stop the Postgres bus's LISTEN connection on app shutdown.
+
+    The in-process bus holds no resources and is left in place: dropping it
+    would strand subscribers still attached to it (e.g. another server's
+    lifespan ending in the same process while sockets are open).
+    """
+    global _bus
+    if isinstance(_bus, PostgresEventBus):
+        await _bus.close()
+        _bus = None
+
+
 def reset_event_bus() -> None:
-    """Reset the cached bus (used by tests)."""
+    """Forget the cached bus (used by tests)."""
     global _bus
     _bus = None

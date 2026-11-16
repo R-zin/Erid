@@ -1,4 +1,0 @@
-# AgentHub gitignore
-# Keep board and sessions, ignore worktree artifacts
-*.tmp
-*.lock

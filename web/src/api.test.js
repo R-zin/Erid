@@ -111,3 +111,17 @@ describe('top-level workspace management API', () => {
   })
 })
 
+
+describe('socketUrl', () => {
+  it('adds credential and resume point as query params', () => {
+    vi.stubGlobal('window', { location: { protocol: 'https:', host: 'hub.example' } })
+    const client = makeClient({ slug: 'ws', credential: 'k&y', authType: 'key' })
+    expect(client.socketUrl()).toBe('wss://hub.example/api/workspaces/ws/ws?api_key=k%26y')
+    expect(client.socketUrl(42)).toBe('wss://hub.example/api/workspaces/ws/ws?api_key=k%26y&since=42')
+  })
+
+  it('omits the query string when there is nothing to send', () => {
+    vi.stubGlobal('window', { location: { protocol: 'http:', host: 'localhost:5173' } })
+    expect(makeClient({ slug: 'ws' }).socketUrl()).toBe('ws://localhost:5173/api/workspaces/ws/ws')
+  })
+})

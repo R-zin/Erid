@@ -1,36 +1,21 @@
+"""REST + WebSocket routes for workspaces and their shared context.
+
+Handlers are thin: FastAPI resolves and authorizes the caller
+(``require_action``), the matching function in :mod:`app.services` does the
+work, and domain errors become HTTP statuses via the handler in ``app.main``.
+"""
+
 import asyncio
 import logging
-import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import Column, select
-from sqlalchemy.dialects.postgresql import TSVECTOR
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.keys import generate_api_key
-from app.core.security import Principal, _find_actor_by_key, hash_api_key, require_action, resolve_ws_principal
+from app.core.security import Principal, require_action, resolve_ws_principal
 from app.core.settings import settings
-from app.core.tokens import issue_token
 from app.db.session import get_db
-from app.models.models import (
-    ROLE_GRANTS,
-    Actor,
-    ActorRole,
-    Decision,
-    Grant,
-    Handoff,
-    HandoffStatus,
-    Permission,
-    Presence,
-    Task,
-    TaskStatus,
-    Workspace,
-)
+from app.models.models import HandoffStatus, Permission, TaskStatus
 from app.schemas.schemas import (
     ActorCreated,
     ActorIn,
@@ -51,38 +36,27 @@ from app.schemas.schemas import (
     WorkspaceListItem,
     WorkspaceSecured,
 )
+from app.services import context as svc
+from app.services import events
+from app.services import workspaces as ws_svc
 from app.services.event_bus import get_event_bus
-from app.services.workspace_service import get_workspace_by_slug
 
 logger = logging.getLogger("context_hub.routes")
 
 router = APIRouter()
-
-# A presence record is considered active if seen within this window.
-STALE_AFTER = timedelta(minutes=10)
 
 # Idle keepalive for the /ws stream (app-level; Starlette exposes no server-side
 # ping/control-frame API, so we send a JSON ``{"type": "ping"}`` frame instead).
 # Dead/half-open clients raise on this send instead of blocking the loop forever.
 WS_HEARTBEAT_SECS = 30
 
-
-async def _publish(slug: str, event_type: str, data: dict) -> None:
-    bus = await get_event_bus()
-    await bus.publish(slug, {"type": event_type, "data": data})
-
-
-def _search_vector(model: type) -> ColumnElement:
-    """Reference the generated ``search_vector`` tsvector column on a model's table.
-
-    The column exists only in Postgres (added by the FTS migration) and is not
-    ORM-mapped, so it is attached to the model's ``Table`` for query use. Queries
-    never SELECT it, so its presence in metadata does not affect ORM loading.
-    """
-    table = model.__table__
-    if "search_vector" not in table.c:
-        table.append_column(Column("search_vector", TSVECTOR))
-    return table.c.search_vector
+READ = require_action(Permission.read)
+WRITE_TASKS = require_action(Permission.write_tasks)
+WRITE_DECISIONS = require_action(Permission.write_decisions)
+WRITE_HANDOFFS = require_action(Permission.write_handoffs)
+PRESENCE = require_action(Permission.presence)
+ADMIN = require_action(Permission.admin_keys)
+OWNER = require_action(Permission.owner)
 
 
 # ---------------------------------------------------------------------------
@@ -92,108 +66,44 @@ def _search_vector(model: type) -> ColumnElement:
 
 @router.post("/workspaces", response_model=WorkspaceCreated, status_code=status.HTTP_201_CREATED)
 async def provision_workspace(
-    slug: str = Query(..., min_length=1),
-    db: AsyncSession = Depends(get_db),
+    slug: str = Query(..., min_length=1), db: AsyncSession = Depends(get_db)
 ) -> WorkspaceCreated:
-    """Create a workspace and return its API key (shown only here).
-
-    Provisioning is open so a brand-new workspace can be secured; if the
-    workspace already exists its key is never re-disclosed.
-    """
-    existing = await get_workspace_by_slug(db, slug)
-    if existing is not None:
-        # Do not leak the key for an existing workspace.
-        return WorkspaceCreated(slug=existing.slug, name=existing.name, created_at=existing.created_at, api_key=None)
-    workspace = Workspace(slug=slug, name=slug, api_key=generate_api_key())
-    db.add(workspace)
-    await db.commit()
-    await db.refresh(workspace)
-    return WorkspaceCreated(
-        slug=workspace.slug, name=workspace.name, created_at=workspace.created_at, api_key=workspace.api_key
-    )
-
-
-@router.delete("/workspaces/{slug}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_workspace(
-    principal: Principal = Depends(require_action(Permission.owner)),
-    db: AsyncSession = Depends(get_db),
-) -> None:
-    """Delete an entire workspace (owner only).
-
-    Cascades its tasks, decisions, presences, and actors/grants. Tasks/decisions/
-    presences/actors are removed via the ORM ``delete-orphan`` cascade on the
-    workspace relationships (the ORM loads and bulk-deletes them); grants are
-    removed by the DB-level ``ON DELETE CASCADE`` on their actor FK.
-    """
-    workspace = principal.workspace
-    await db.delete(workspace)
-    await db.commit()
-    await _publish(workspace.slug, "workspace_deleted", {"slug": workspace.slug})
+    """Create a workspace and return its API key (shown only here; never re-disclosed)."""
+    return await ws_svc.provision_workspace(db, slug)
 
 
 @router.get("/workspaces", response_model=list[WorkspaceListItem])
 async def list_workspaces(db: AsyncSession = Depends(get_db)) -> list[WorkspaceListItem]:
     """List every workspace (slug, name, secured flag).
 
-    Deliberately unauthenticated: there is no instance-wide principal to gate on
-    (principals are per-workspace), a directory is needed to discover workspaces,
-    and only non-secret metadata is exposed — keys are never returned. A keyless
-    workspace must remain discoverable so it can later be secured.
+    Deliberately unauthenticated: principals are per-workspace, a directory is
+    needed to discover workspaces, and only non-secret metadata is exposed.
     """
-    result = await db.execute(select(Workspace).order_by(Workspace.slug))
-    return [
-        WorkspaceListItem(slug=w.slug, name=w.name, created_at=w.created_at, secured=bool(w.api_key))
-        for w in result.scalars().all()
-    ]
+    return await ws_svc.list_workspaces(db)
+
+
+@router.delete("/workspaces/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_workspace(principal: Principal = Depends(OWNER), db: AsyncSession = Depends(get_db)) -> None:
+    """Delete an entire workspace and everything in it (owner only)."""
+    await ws_svc.delete_workspace(db, principal)
 
 
 @router.post("/workspaces/{slug}/secure", response_model=WorkspaceSecured)
 async def secure_workspace(slug: str, db: AsyncSession = Depends(get_db)) -> WorkspaceSecured:
-    """Secure an open workspace by minting its workspace key (returned once).
+    """Claim an open workspace by minting its key (returned once).
 
-    An open workspace (``api_key`` NULL) has no admin at all, so there is no
-    credential to gate this on: anyone can claim it. That matches the existing
-    provisioning model (``POST /workspaces`` is likewise open). The first caller
-    becomes the de-facto owner by taking the disclosed key. If the workspace is
-    already secured its key is never re-disclosed (use ``rotate-key`` instead).
-
-    Claiming is refused outright when ``allow_open_workspaces`` is off: on a
-    deployment that has declared it has no open workspaces, handing an owner key
-    to an unauthenticated caller is exactly the thing being prevented.
+    Unauthenticated by design (an open workspace has no admin to gate on), and
+    refused when ``ERID_ALLOW_OPEN_WORKSPACES=0``.
     """
-    workspace = await get_workspace_by_slug(db, slug)
-    if workspace is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"workspace '{slug}' not found")
-    if workspace.api_key:
-        return WorkspaceSecured(slug=workspace.slug, secured=True, api_key=None)
-    if not settings.allow_open_workspaces:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "open workspaces are disabled (ERID_ALLOW_OPEN_WORKSPACES=0), so an unauthenticated "
-                "caller cannot claim one; provision with POST /api/workspaces?slug= instead"
-            ),
-        )
-    workspace.api_key = generate_api_key()
-    await db.commit()
-    return WorkspaceSecured(slug=workspace.slug, secured=True, api_key=workspace.api_key)
+    return await ws_svc.secure_workspace(db, slug)
 
 
 @router.post("/workspaces/{slug}/rotate-key", response_model=WorkspaceKeyRotated)
 async def rotate_workspace_key(
-    principal: Principal = Depends(require_action(Permission.owner)),
-    db: AsyncSession = Depends(get_db),
+    principal: Principal = Depends(OWNER), db: AsyncSession = Depends(get_db)
 ) -> WorkspaceKeyRotated:
-    """Rotate the workspace key (owner only). Returns the new key once.
-
-    The old workspace key stops working immediately. Per-actor keys are
-    unaffected (they are separate credentials), so existing actors keep access
-    and the rotated key simply re-secures the legacy/owner path.
-    """
-    workspace = principal.workspace
-    workspace.api_key = generate_api_key()
-    await db.commit()
-    return WorkspaceKeyRotated(slug=workspace.slug, api_key=workspace.api_key)
+    """Rotate the workspace key (owner only). Returns the new key once."""
+    return await ws_svc.rotate_workspace_key(db, principal)
 
 
 # ---------------------------------------------------------------------------
@@ -203,101 +113,30 @@ async def rotate_workspace_key(
 
 @router.post("/workspaces/{slug}/actors", response_model=ActorCreated, status_code=status.HTTP_201_CREATED)
 async def create_actor(
-    payload: ActorIn,
-    principal: Principal = Depends(require_action(Permission.admin_keys)),
-    db: AsyncSession = Depends(get_db),
+    payload: ActorIn, principal: Principal = Depends(ADMIN), db: AsyncSession = Depends(get_db)
 ) -> ActorCreated:
-    """Mint a new actor with its own API key (shown only here).
-
-    Requires the ``admin_keys`` permission. The raw key is never stored — only
-    its SHA-256 — so it is disclosed exactly once in this response.
-    """
-    workspace = principal.workspace
-    existing = await db.execute(select(Actor).where(Actor.workspace_id == workspace.id, Actor.name == payload.name))
-    if existing.scalars().first() is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"actor '{payload.name}' already exists")
-
-    raw_key = generate_api_key()
-    actor = Actor(
-        workspace_id=workspace.id,
-        name=payload.name,
-        role=payload.role,
-        key_hash=hash_api_key(raw_key),
-    )
-    db.add(actor)
-    await db.flush()  # get actor.id for grants
-    grants = (
-        [Grant(actor_id=actor.id, permission=p) for p in set(payload.permissions)]
-        if payload.permissions is not None
-        else [Grant(actor_id=actor.id, permission=p) for p in ROLE_GRANTS[payload.role]]
-    )
-    db.add_all(grants)
-    await db.commit()
-    await db.refresh(actor)
-    return ActorCreated(
-        id=actor.id,
-        name=actor.name,
-        role=actor.role,
-        active=actor.active,
-        created_at=actor.created_at,
-        api_key=raw_key,
-    )
+    """Mint a new actor with its own API key (shown only here; stored hashed)."""
+    return await ws_svc.create_actor(db, principal, payload)
 
 
 @router.get("/workspaces/{slug}/actors", response_model=list[ActorOut])
-async def list_actors(
-    principal: Principal = Depends(require_action(Permission.admin_keys)),
-    db: AsyncSession = Depends(get_db),
-) -> list[ActorOut]:
+async def list_actors(principal: Principal = Depends(ADMIN), db: AsyncSession = Depends(get_db)) -> list[ActorOut]:
     """List actors in the workspace (names, roles, status — never keys)."""
-    result = await db.execute(select(Actor).where(Actor.workspace_id == principal.workspace.id).order_by(Actor.name))
-    return [ActorOut.model_validate(a) for a in result.scalars().all()]
+    return await ws_svc.list_actors(db, principal)
 
 
 @router.delete("/workspaces/{slug}/actors/{actor_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_actor(
-    actor_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.admin_keys)),
-    db: AsyncSession = Depends(get_db),
+    actor_id: uuid.UUID, principal: Principal = Depends(ADMIN), db: AsyncSession = Depends(get_db)
 ) -> None:
-    """Revoke an actor (delete it; its keys and grants stop working)."""
-    result = await db.execute(select(Actor).where(Actor.id == actor_id, Actor.workspace_id == principal.workspace.id))
-    actor = result.scalars().first()
-    if actor is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"actor '{actor_id}' not found")
-    await db.delete(actor)
-    await db.commit()
+    """Revoke an actor (its keys and grants stop working)."""
+    await ws_svc.delete_actor(db, principal, actor_id)
 
 
 @router.post("/workspaces/{slug}/token", response_model=ActorToken)
-async def login_for_token(
-    payload: TokenRequest,
-    slug: str,
-    db: AsyncSession = Depends(get_db),
-) -> ActorToken:
-    """Exchange an actor (or legacy workspace) API key for a short-lived JWT.
-
-    Clients then send the token as ``Authorization: Bearer <jwt>`` instead of
-    re-sending the raw key on every request.
-    """
-    workspace = await get_workspace_by_slug(db, slug)
-    if workspace is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"workspace '{slug}' not found")
-
-    name: str
-    role: ActorRole | None
-    if workspace.api_key and secrets.compare_digest(payload.api_key, workspace.api_key):
-        name, role = workspace.slug, ActorRole.owner  # legacy key acts as owner
-    else:
-        actor = await _find_actor_by_key(db, workspace, payload.api_key)
-        if actor is None:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid api key")
-        name, role = actor.name, actor.role
-
-    return ActorToken(
-        access_token=issue_token(workspace_slug=slug, actor_name=name, role=role.value if role else None),
-        expires_in=settings.jwt_ttl_seconds,
-    )
+async def login_for_token(payload: TokenRequest, slug: str, db: AsyncSession = Depends(get_db)) -> ActorToken:
+    """Exchange an actor (or legacy workspace) API key for a short-lived JWT."""
+    return await ws_svc.exchange_key_for_token(db, slug, payload.api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -308,93 +147,51 @@ async def login_for_token(
 @router.get("/workspaces/{slug}/tasks", response_model=list[TaskOut])
 async def list_tasks(
     status_filter: TaskStatus | None = Query(default=None, alias="status"),
-    principal: Principal = Depends(require_action(Permission.read)),
+    principal: Principal = Depends(READ),
     db: AsyncSession = Depends(get_db),
 ) -> list[TaskOut]:
-    workspace = principal.workspace
-    stmt = select(Task).where(Task.workspace_id == workspace.id).order_by(Task.created_at)
-    if status_filter is not None:
-        stmt = stmt.where(Task.status == status_filter)
-    result = await db.execute(stmt)
-    return [TaskOut.model_validate(t) for t in result.scalars().all()]
+    return await svc.list_tasks(db, principal, status_filter)
 
 
 @router.post("/workspaces/{slug}/tasks", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
 async def create_task(
-    payload: TaskIn,
-    principal: Principal = Depends(require_action(Permission.write_tasks)),
-    db: AsyncSession = Depends(get_db),
+    payload: TaskIn, principal: Principal = Depends(WRITE_TASKS), db: AsyncSession = Depends(get_db)
 ) -> TaskOut:
-    workspace = principal.workspace
-    task = Task(
-        workspace_id=workspace.id,
-        title=payload.title,
-        assigned_to=payload.assigned_to,
-        created_by=payload.created_by or principal.actor_name,
-        status=payload.status,
-    )
-    db.add(task)
-    await db.commit()
-    await db.refresh(task)
-    await _publish(workspace.slug, "task_created", TaskOut.model_validate(task).model_dump(mode="json"))
-    return TaskOut.model_validate(task)
+    return await svc.create_task(db, principal, payload)
 
 
 @router.put("/workspaces/{slug}/tasks/{task_id}", response_model=TaskOut)
 async def update_task(
     task_id: uuid.UUID,
     payload: TaskUpdate,
-    principal: Principal = Depends(require_action(Permission.write_tasks)),
+    principal: Principal = Depends(WRITE_TASKS),
     db: AsyncSession = Depends(get_db),
 ) -> TaskOut:
-    workspace = principal.workspace
-    result = await db.execute(select(Task).where(Task.id == task_id, Task.workspace_id == workspace.id))
-    task = result.scalars().first()
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"task '{task_id}' not found")
-    if payload.title is not None:
-        task.title = payload.title
-    if payload.status is not None:
-        task.status = payload.status
-    if payload.assigned_to is not None:
-        task.assigned_to = payload.assigned_to
-    await db.commit()
-    await db.refresh(task)
-    await _publish(workspace.slug, "task_updated", TaskOut.model_validate(task).model_dump(mode="json"))
-    return TaskOut.model_validate(task)
+    return await svc.update_task(db, principal, task_id, payload)
 
 
 @router.delete("/workspaces/{slug}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
-    task_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.write_tasks)),
-    db: AsyncSession = Depends(get_db),
+    task_id: uuid.UUID, principal: Principal = Depends(WRITE_TASKS), db: AsyncSession = Depends(get_db)
 ) -> None:
     """Delete a task. Decisions that link to it are kept (their task_id SET NULLs)."""
-    workspace = principal.workspace
-    result = await db.execute(select(Task).where(Task.id == task_id, Task.workspace_id == workspace.id))
-    task = result.scalars().first()
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"task '{task_id}' not found")
-    await db.delete(task)
-    await db.commit()
-    await _publish(workspace.slug, "task_deleted", {"id": str(task_id), "workspace_id": str(workspace.id)})
+    await svc.delete_task(db, principal, task_id)
 
 
 @router.get("/workspaces/{slug}/tasks/{task_id}/decisions", response_model=list[DecisionOut])
 async def list_task_decisions(
-    task_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.read)),
-    db: AsyncSession = Depends(get_db),
+    task_id: uuid.UUID, principal: Principal = Depends(READ), db: AsyncSession = Depends(get_db)
 ) -> list[DecisionOut]:
-    """List decisions linked to a task (decision ↔ task linking)."""
-    workspace = principal.workspace
-    result = await db.execute(
-        select(Decision)
-        .where(Decision.workspace_id == workspace.id, Decision.task_id == task_id)
-        .order_by(Decision.created_at.desc())
-    )
-    return [DecisionOut.model_validate(d) for d in result.scalars().all()]
+    """List decisions linked to a task."""
+    return await svc.list_task_decisions(db, principal, task_id)
+
+
+@router.get("/workspaces/{slug}/tasks/{task_id}/handoffs", response_model=list[HandoffOut])
+async def list_task_handoffs(
+    task_id: uuid.UUID, principal: Principal = Depends(READ), db: AsyncSession = Depends(get_db)
+) -> list[HandoffOut]:
+    """List handoffs that reference a task (newest first)."""
+    return await svc.list_task_handoffs(db, principal, task_id)
 
 
 # ---------------------------------------------------------------------------
@@ -405,66 +202,24 @@ async def list_task_decisions(
 @router.get("/workspaces/{slug}/decisions", response_model=list[DecisionOut])
 async def list_decisions(
     limit: int = Query(default=20, ge=1, le=100),
-    principal: Principal = Depends(require_action(Permission.read)),
+    principal: Principal = Depends(READ),
     db: AsyncSession = Depends(get_db),
 ) -> list[DecisionOut]:
-    workspace = principal.workspace
-    stmt = (
-        select(Decision).where(Decision.workspace_id == workspace.id).order_by(Decision.created_at.desc()).limit(limit)
-    )
-    result = await db.execute(stmt)
-    return [DecisionOut.model_validate(d) for d in result.scalars().all()]
+    return await svc.list_decisions(db, principal, limit)
 
 
 @router.post("/workspaces/{slug}/decisions", response_model=DecisionOut, status_code=status.HTTP_201_CREATED)
 async def create_decision(
-    payload: DecisionIn,
-    principal: Principal = Depends(require_action(Permission.write_decisions)),
-    db: AsyncSession = Depends(get_db),
+    payload: DecisionIn, principal: Principal = Depends(WRITE_DECISIONS), db: AsyncSession = Depends(get_db)
 ) -> DecisionOut:
-    workspace = principal.workspace
-    # If linking to a task, it must exist in this workspace.
-    if payload.task_id is not None:
-        task = (
-            (await db.execute(select(Task).where(Task.id == payload.task_id, Task.workspace_id == workspace.id)))
-            .scalars()
-            .first()
-        )
-        if task is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"task '{payload.task_id}' not found in workspace",
-            )
-    decision = Decision(
-        workspace_id=workspace.id,
-        title=payload.title,
-        reason=payload.reason,
-        related_files=payload.related_files,
-        made_by=payload.made_by or principal.actor_name,
-        task_id=payload.task_id,
-    )
-    db.add(decision)
-    await db.commit()
-    await db.refresh(decision)
-    await _publish(workspace.slug, "decision_created", DecisionOut.model_validate(decision).model_dump(mode="json"))
-    return DecisionOut.model_validate(decision)
+    return await svc.create_decision(db, principal, payload)
 
 
 @router.delete("/workspaces/{slug}/decisions/{decision_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_decision(
-    decision_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.write_decisions)),
-    db: AsyncSession = Depends(get_db),
+    decision_id: uuid.UUID, principal: Principal = Depends(WRITE_DECISIONS), db: AsyncSession = Depends(get_db)
 ) -> None:
-    """Delete a decision."""
-    workspace = principal.workspace
-    result = await db.execute(select(Decision).where(Decision.id == decision_id, Decision.workspace_id == workspace.id))
-    decision = result.scalars().first()
-    if decision is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"decision '{decision_id}' not found")
-    await db.delete(decision)
-    await db.commit()
-    await _publish(workspace.slug, "decision_deleted", {"id": str(decision_id), "workspace_id": str(workspace.id)})
+    await svc.delete_decision(db, principal, decision_id)
 
 
 # ---------------------------------------------------------------------------
@@ -472,158 +227,53 @@ async def delete_decision(
 # ---------------------------------------------------------------------------
 
 
-async def _get_handoff_or_404(db: AsyncSession, workspace: Workspace, handoff_id: uuid.UUID) -> Handoff:
-    result = await db.execute(select(Handoff).where(Handoff.id == handoff_id, Handoff.workspace_id == workspace.id))
-    handoff = result.scalars().first()
-    if handoff is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"handoff '{handoff_id}' not found")
-    return handoff
-
-
 @router.get("/workspaces/{slug}/handoffs", response_model=list[HandoffOut])
 async def list_handoffs(
     status_filter: HandoffStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=20, ge=1, le=100),
-    principal: Principal = Depends(require_action(Permission.read)),
+    principal: Principal = Depends(READ),
     db: AsyncSession = Depends(get_db),
 ) -> list[HandoffOut]:
     """List handoffs in a workspace (newest first), optionally filtered by status."""
-    stmt = (
-        select(Handoff)
-        .where(Handoff.workspace_id == principal.workspace.id)
-        .order_by(Handoff.created_at.desc())
-        .limit(limit)
-    )
-    if status_filter is not None:
-        stmt = stmt.where(Handoff.status == status_filter)
-    result = await db.execute(stmt)
-    return [HandoffOut.model_validate(h) for h in result.scalars().all()]
+    return await svc.list_handoffs(db, principal, status_filter, limit)
 
 
 @router.get("/workspaces/{slug}/handoffs/{handoff_id}", response_model=HandoffOut)
 async def get_handoff(
-    handoff_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.read)),
-    db: AsyncSession = Depends(get_db),
+    handoff_id: uuid.UUID, principal: Principal = Depends(READ), db: AsyncSession = Depends(get_db)
 ) -> HandoffOut:
-    """Fetch a single handoff by id."""
-    handoff = await _get_handoff_or_404(db, principal.workspace, handoff_id)
-    return HandoffOut.model_validate(handoff)
+    return await svc.get_handoff(db, principal, handoff_id)
 
 
 @router.post("/workspaces/{slug}/handoffs", response_model=HandoffOut, status_code=status.HTTP_201_CREATED)
 async def create_handoff(
-    payload: HandoffIn,
-    principal: Principal = Depends(require_action(Permission.write_handoffs)),
-    db: AsyncSession = Depends(get_db),
+    payload: HandoffIn, principal: Principal = Depends(WRITE_HANDOFFS), db: AsyncSession = Depends(get_db)
 ) -> HandoffOut:
-    """Record a session handoff so another session can resume safely.
-
-    ``created_by`` defaults to the authenticated actor's name; pass it explicitly
-    only when reporting on someone else's behalf (e.g. the legacy workspace key).
-    """
-    workspace = principal.workspace
-    # If linking to a task, it must exist in this workspace.
-    if payload.task_id is not None:
-        task = (
-            (await db.execute(select(Task).where(Task.id == payload.task_id, Task.workspace_id == workspace.id)))
-            .scalars()
-            .first()
-        )
-        if task is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"task '{payload.task_id}' not found in workspace",
-            )
-    handoff = Handoff(
-        workspace_id=workspace.id,
-        task_id=payload.task_id,
-        # Legacy-key principals have no actor row; attribute those to the
-        # workspace slug (matching the name they get when minting a JWT).
-        created_by=payload.created_by or principal.actor_name or workspace.slug,
-        recipient=payload.recipient,
-        branch=payload.branch,
-        worktree=payload.worktree,
-        summary=payload.summary,
-        files_changed=payload.files_changed,
-        commands_run=payload.commands_run,
-        blockers=payload.blockers,
-        next_action=payload.next_action,
-    )
-    db.add(handoff)
-    await db.commit()
-    await db.refresh(handoff)
-    await _publish(workspace.slug, "handoff_created", HandoffOut.model_validate(handoff).model_dump(mode="json"))
-    return HandoffOut.model_validate(handoff)
+    """Record a session handoff so another session can resume safely."""
+    return await svc.create_handoff(db, principal, payload)
 
 
 @router.post("/workspaces/{slug}/handoffs/{handoff_id}/acknowledge", response_model=HandoffOut)
 async def acknowledge_handoff(
-    handoff_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.write_handoffs)),
-    db: AsyncSession = Depends(get_db),
+    handoff_id: uuid.UUID, principal: Principal = Depends(WRITE_HANDOFFS), db: AsyncSession = Depends(get_db)
 ) -> HandoffOut:
-    """Mark a handoff as picked up (open → acknowledged). Idempotent when already acknowledged."""
-    workspace = principal.workspace
-    handoff = await _get_handoff_or_404(db, workspace, handoff_id)
-    if handoff.status == HandoffStatus.resolved:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="handoff is already resolved")
-    if handoff.status == HandoffStatus.open:
-        handoff.status = HandoffStatus.acknowledged
-        handoff.acknowledged_at = datetime.now(UTC)
-        handoff.acknowledged_by = principal.actor_name
-        await db.commit()
-        await db.refresh(handoff)
-        await _publish(workspace.slug, "handoff_updated", HandoffOut.model_validate(handoff).model_dump(mode="json"))
-    return HandoffOut.model_validate(handoff)
+    """Mark a handoff as picked up (open → acknowledged). Idempotent; 409 once resolved."""
+    return await svc.acknowledge_handoff(db, principal, handoff_id)
 
 
 @router.post("/workspaces/{slug}/handoffs/{handoff_id}/resolve", response_model=HandoffOut)
 async def resolve_handoff(
-    handoff_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.write_handoffs)),
-    db: AsyncSession = Depends(get_db),
+    handoff_id: uuid.UUID, principal: Principal = Depends(WRITE_HANDOFFS), db: AsyncSession = Depends(get_db)
 ) -> HandoffOut:
-    """Mark a handoff as completed (open/acknowledged → resolved). Idempotent when already resolved."""
-    workspace = principal.workspace
-    handoff = await _get_handoff_or_404(db, workspace, handoff_id)
-    if handoff.status != HandoffStatus.resolved:
-        handoff.status = HandoffStatus.resolved
-        handoff.resolved_at = datetime.now(UTC)
-        handoff.resolved_by = principal.actor_name
-        await db.commit()
-        await db.refresh(handoff)
-        await _publish(workspace.slug, "handoff_updated", HandoffOut.model_validate(handoff).model_dump(mode="json"))
-    return HandoffOut.model_validate(handoff)
+    """Mark a handoff as completed (→ resolved). Idempotent."""
+    return await svc.resolve_handoff(db, principal, handoff_id)
 
 
 @router.delete("/workspaces/{slug}/handoffs/{handoff_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_handoff(
-    handoff_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.write_handoffs)),
-    db: AsyncSession = Depends(get_db),
+    handoff_id: uuid.UUID, principal: Principal = Depends(WRITE_HANDOFFS), db: AsyncSession = Depends(get_db)
 ) -> None:
-    """Delete a handoff."""
-    workspace = principal.workspace
-    handoff = await _get_handoff_or_404(db, workspace, handoff_id)
-    await db.delete(handoff)
-    await db.commit()
-    await _publish(workspace.slug, "handoff_deleted", {"id": str(handoff_id), "workspace_id": str(workspace.id)})
-
-
-@router.get("/workspaces/{slug}/tasks/{task_id}/handoffs", response_model=list[HandoffOut])
-async def list_task_handoffs(
-    task_id: uuid.UUID,
-    principal: Principal = Depends(require_action(Permission.read)),
-    db: AsyncSession = Depends(get_db),
-) -> list[HandoffOut]:
-    """List handoffs that reference a task (newest first)."""
-    result = await db.execute(
-        select(Handoff)
-        .where(Handoff.workspace_id == principal.workspace.id, Handoff.task_id == task_id)
-        .order_by(Handoff.created_at.desc())
-    )
-    return [HandoffOut.model_validate(h) for h in result.scalars().all()]
+    await svc.delete_handoff(db, principal, handoff_id)
 
 
 # ---------------------------------------------------------------------------
@@ -632,68 +282,16 @@ async def list_task_handoffs(
 
 
 @router.get("/workspaces/{slug}/presence", response_model=list[PresenceOut])
-async def list_presence(
-    principal: Principal = Depends(require_action(Permission.read)),
-    db: AsyncSession = Depends(get_db),
-) -> list[PresenceOut]:
-    workspace = principal.workspace
-    cutoff = datetime.now(UTC) - STALE_AFTER
-    stmt = (
-        select(Presence)
-        .where(Presence.workspace_id == workspace.id, Presence.last_seen > cutoff)
-        .order_by(Presence.last_seen.desc())
-    )
-    result = await db.execute(stmt)
-    return [PresenceOut.model_validate(p) for p in result.scalars().all()]
+async def list_presence(principal: Principal = Depends(READ), db: AsyncSession = Depends(get_db)) -> list[PresenceOut]:
+    return await svc.list_presence(db, principal)
 
 
 @router.post("/workspaces/{slug}/presence", response_model=PresenceOut)
 async def update_presence(
-    payload: PresenceIn,
-    principal: Principal = Depends(require_action(Permission.presence)),
-    db: AsyncSession = Depends(get_db),
+    payload: PresenceIn, principal: Principal = Depends(PRESENCE), db: AsyncSession = Depends(get_db)
 ) -> PresenceOut:
-    """Upsert a presence heartbeat for an actor, keyed on (workspace, actor).
-
-    Implemented as a true atomic ``INSERT ... ON CONFLICT ... DO UPDATE`` against
-    the ``(workspace_id, actor_name)`` unique constraint, using the Postgres or
-    SQLite insert construct depending on the bound dialect. This removes the old
-    read-then-insert race that would raise on concurrent heartbeats.
-    """
-    workspace = principal.workspace
-    now = datetime.now(UTC)
-    values = {
-        "workspace_id": workspace.id,
-        "actor_name": payload.actor_name,
-        "actor_type": payload.actor_type,
-        "current_file": payload.current_file,
-        "current_task": payload.current_task,
-        "last_seen": now,
-    }
-    insert = pg_insert if db.bind.dialect.name == "postgresql" else sqlite_insert
-    stmt = insert(Presence).values(**values)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["workspace_id", "actor_name"],
-        set_={
-            "actor_type": stmt.excluded.actor_type,
-            "current_file": stmt.excluded.current_file,
-            "current_task": stmt.excluded.current_task,
-            "last_seen": stmt.excluded.last_seen,
-        },
-    )
-    await db.execute(stmt)
-    await db.commit()
-    presence = (
-        (
-            await db.execute(
-                select(Presence).where(Presence.workspace_id == workspace.id, Presence.actor_name == payload.actor_name)
-            )
-        )
-        .scalars()
-        .one()
-    )
-    await _publish(workspace.slug, "presence_updated", PresenceOut.model_validate(presence).model_dump(mode="json"))
-    return PresenceOut.model_validate(presence)
+    """Upsert a presence heartbeat for an actor, keyed on (workspace, actor)."""
+    return await svc.update_presence(db, principal, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -701,40 +299,72 @@ async def update_presence(
 # ---------------------------------------------------------------------------
 
 
+def _ws_db_dependency(websocket: WebSocket):
+    """``get_db`` honouring app-level dependency overrides (tests swap the DB)."""
+    return websocket.app.dependency_overrides.get(get_db, get_db)
+
+
 @router.websocket("/workspaces/{slug}/ws")
 async def workspace_events(websocket: WebSocket, slug: str):
-    """Stream workspace events. Auth via ``?api_key=...`` / ``?token=...`` or the
-    ``X-API-Key`` header when the workspace has a key configured (WS clients
-    often can't set headers, so query params are also accepted)."""
-    await websocket.accept()
+    """Stream workspace events.
 
-    # Resolve workspace + enforce auth manually (no DI for WS query auth).
-    db_gen = get_db()
-    db = await anext(db_gen)
+    Auth via ``?api_key=`` / ``?token=`` or the ``X-API-Key`` header (browsers
+    can't set WS headers, so query params are accepted).
+
+    Every stored event carries a ``seq``. Reconnect with ``?since=<last seq>`` to
+    replay what you missed before the live stream resumes. If the server can't
+    replay the gap (too far behind, or the outbox was pruned) it sends
+    ``{"type": "resync_required"}`` first: reload a snapshot over REST.
+    """
+    await websocket.accept()
+    since_raw = websocket.query_params.get("since")
     try:
-        key = websocket.query_params.get("api_key") or websocket.headers.get(settings.api_key_header)
-        token = websocket.query_params.get("token")
-        principal = await resolve_ws_principal(slug, db, key=key, token=token)
-        if principal is None or not principal.has(Permission.read):
-            await websocket.close(code=1008, reason="invalid credentials")
-            return
-    finally:
-        await db_gen.aclose()
+        since = int(since_raw) if since_raw is not None else None
+    except ValueError:
+        await websocket.close(code=1008, reason="invalid 'since'")
+        return
 
     bus = await get_event_bus()
-    try:
-        async with bus.subscribe(slug) as queue:
+    # Subscribe BEFORE reading the backlog, so nothing committed in between is
+    # lost; anything seen in both is dropped below by seq.
+    async with bus.subscribe(slug) as queue:
+        db_gen = _ws_db_dependency(websocket)()
+        db = await anext(db_gen)
+        try:
+            key = websocket.query_params.get("api_key") or websocket.headers.get(settings.api_key_header)
+            token = websocket.query_params.get("token")
+            principal = await resolve_ws_principal(slug, db, key=key, token=token)
+            if principal is None or not principal.has(Permission.read):
+                await websocket.close(code=1008, reason="invalid credentials")
+                return
+            backlog: list[dict] = []
+            complete = True
+            if since is not None:
+                backlog, complete = await events.events_since(db, principal.workspace, since)
+        finally:
+            await db_gen.aclose()
+
+        try:
+            if not complete:
+                await websocket.send_json({"type": "resync_required", "workspace": slug})
+            for envelope in backlog:
+                await websocket.send_json(envelope)
+            # Only skip exact duplicates of the backlog. Don't drop "older" seqs:
+            # transactions can commit out of seq order, so a lower seq may
+            # legitimately arrive after a higher one.
+            replayed = {envelope["seq"] for envelope in backlog}
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=WS_HEARTBEAT_SECS)
                 except TimeoutError:
-                    # Idle connection: probe with an app-level keepalive so a dead
-                    # or half-open client fails the send (and exits) rather than
-                    # sitting on queue.get() forever (resource exhaustion).
+                    # Idle: probe with an app-level keepalive so a dead or half-open
+                    # client fails the send rather than holding the socket forever.
                     await websocket.send_json({"type": "ping"})
                     continue
+                if replayed and event.get("seq") in replayed:
+                    continue
                 await websocket.send_json(event)
-    except WebSocketDisconnect:
-        pass
-    except (asyncio.CancelledError, RuntimeError) as exc:  # connection dropped
-        logger.debug("workspace_events closed for %s: %s", slug, exc)
+        except WebSocketDisconnect:
+            pass
+        except (asyncio.CancelledError, RuntimeError) as exc:  # connection dropped
+            logger.debug("workspace_events closed for %s: %s", slug, exc)

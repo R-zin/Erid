@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Self-host deploy for the AI Context Hub: pull latest, rebuild, restart the
-# web stack (postgres + redis + api + web), and wait for the API to come up.
+# web stack (postgres + api + web), and wait for the API to come up.
 #
 # Usage:  ./infra/deploy.sh
 # Expects to be run from the repo root on the deploy host (Docker + Compose
@@ -19,8 +19,8 @@ git pull --ff-only
 echo "==> Building api + web images"
 docker compose build api web
 
-echo "==> Starting postgres, redis, api, web"
-docker compose up -d postgres redis api web
+echo "==> Starting postgres, api, web"
+docker compose up -d postgres api web
 
 echo "==> Waiting for the API to become healthy"
 for i in $(seq 1 60); do

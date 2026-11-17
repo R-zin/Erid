@@ -81,6 +81,11 @@ class Settings:
     # Secret for signing the OAuth ``state`` round-trip (itsdangerous). When
     # empty, OAuth social login is disabled (login/callback return 503).
     session_secret: str = field(default_factory=lambda: os.getenv("ERID_SESSION_SECRET", ""))
+    # Lifetime of an OAuth invitation (owner-minted, single-use link that lets a
+    # new Google/GitHub identity join a *secured* workspace). Default 7 days.
+    oauth_invite_ttl_seconds: int = field(
+        default_factory=lambda: int(os.getenv("ERID_OAUTH_INVITE_TTL_SECONDS", "604800"))
+    )
     # Google OAuth app credentials. Empty client id => provider disabled (503).
     oauth_google_client_id: str = field(default_factory=lambda: os.getenv("ERID_OAUTH_GOOGLE_CLIENT_ID", ""))
     oauth_google_client_secret: str = field(default_factory=lambda: os.getenv("ERID_OAUTH_GOOGLE_CLIENT_SECRET", ""))

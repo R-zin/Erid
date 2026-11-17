@@ -618,6 +618,75 @@
         "title": "HandoffStatus",
         "type": "string"
       },
+      "OAuthInvite": {
+        "description": "A signed, single-use invitation linking a Google/GitHub login to an actor.\n\nShown once; hand the matching ``login_urls`` entry to the invitee.",
+        "properties": {
+          "actor_id": {
+            "format": "uuid",
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "actor_name": {
+            "title": "Actor Name",
+            "type": "string"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "invite": {
+            "title": "Invite",
+            "type": "string"
+          },
+          "login_urls": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Login Urls",
+            "type": "object"
+          }
+        },
+        "required": [
+          "actor_id",
+          "actor_name",
+          "invite",
+          "email",
+          "expires_in",
+          "login_urls"
+        ],
+        "title": "OAuthInvite",
+        "type": "object"
+      },
+      "OAuthInviteIn": {
+        "description": "Optional constraints on an OAuth invitation.",
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "title": "OAuthInviteIn",
+        "type": "object"
+      },
       "Permission": {
         "description": "Fine-grained, per-resource actions a principal may be granted.\n\nEach API route / WS declares the action it requires; a principal may act\nwhen it holds the matching permission (``owner`` implies all).",
         "enum": [
@@ -1223,7 +1292,7 @@
     },
     "/api/auth/{provider}/login": {
       "get": {
-        "description": "Begin the OAuth flow: redirect the browser to the provider.\n\n``slug`` names the workspace the resulting actor should join (created as an\nopen workspace on first use). Requires the provider to be configured\n(``ERID_OAUTH_<PROVIDER>_*``) and ``ERID_SESSION_SECRET`` to be set.",
+        "description": "Begin the OAuth flow: redirect the browser to the provider.\n\n``slug`` names the workspace to log in to. A first-time identity may only\njoin a *secured* workspace with an ``invite`` (from\n``POST /workspaces/{slug}/actors/{actor_id}/oauth-invite``); open workspaces\nallow self-join while ``ERID_ALLOW_OPEN_WORKSPACES`` is on. Requires the\nprovider to be configured (``ERID_OAUTH_<PROVIDER>_*``) and\n``ERID_SESSION_SECRET`` to be set.",
         "operationId": "oauth_login_api_auth__provider__login_get",
         "parameters": [
           {
@@ -1244,6 +1313,24 @@
               "minLength": 1,
               "title": "Slug",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "invite",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Invite"
             }
           }
         ],
@@ -1562,6 +1649,87 @@
         "summary": "Delete Actor",
         "tags": [
           "context"
+        ]
+      }
+    },
+    "/api/workspaces/{slug}/actors/{actor_id}/oauth-invite": {
+      "post": {
+        "description": "Invite a person to log in as an existing actor via Google/GitHub (admin only).\n\nCreate the actor first (``POST /workspaces/{slug}/actors``) with the role it\nshould have, then mint an invite for it. The first OAuth login carrying the\ninvite links that provider account to the actor; afterwards the invite is\nspent. Optionally pin ``email`` so only an account with that verified email\ncan redeem it.",
+        "operationId": "create_oauth_invite_api_workspaces__slug__actors__actor_id__oauth_invite_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Actor Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/OAuthInviteIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthInvite"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          },
+          {
+            "APIKeyQuery": []
+          },
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Oauth Invite",
+        "tags": [
+          "auth"
         ]
       }
     },

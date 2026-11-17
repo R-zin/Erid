@@ -9,8 +9,9 @@ it holds the matching :class:`Permission`. Four credential shapes are accepted
   (full access) so existing deployments keep working.
 - **actor key** — a per-actor API key (``actors.key_hash`` holds only its
   SHA-256). Resolves to that actor's role + grants.
-- **JWT bearer** — an Ed25519 token from ``POST /workspaces/{slug}/token``,
-  resolved back to its actor.
+- **JWT bearer** — an Ed25519 token from ``POST /workspaces/{slug}/token`` (or
+  OAuth login), resolved back to its actor **by id** (``sub`` is the actor's
+  UUID); a legacy-key token has ``sub`` = the workspace slug and role owner.
 - **open** — a workspace with no key at all: read/write fully open (back-compat).
   Only when ``settings.allow_open_workspaces`` is on (the default); see
   :func:`_resolve_workspace`.
@@ -20,6 +21,7 @@ Authorization is fine-grained: each route declares the action it requires via
 """
 
 import secrets
+import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum
@@ -90,13 +92,23 @@ async def _find_actor_by_key(db: AsyncSession, workspace: Workspace, raw: str) -
     return None
 
 
-async def _find_actor_by_name(db: AsyncSession, workspace: Workspace, name: str) -> Actor | None:
+async def _find_actor_by_id(db: AsyncSession, workspace: Workspace, actor_id: uuid.UUID) -> Actor | None:
     result = await db.execute(
         select(Actor)
         .options(selectinload(Actor.grants))
-        .where(Actor.workspace_id == workspace.id, Actor.name == name, Actor.active.is_(True))
+        .where(Actor.workspace_id == workspace.id, Actor.id == actor_id, Actor.active.is_(True))
     )
     return result.scalars().first()
+
+
+def _actor_id_from_sub(sub: object) -> uuid.UUID | None:
+    """Parse an actor token's ``sub`` (the actor's UUID); ``None`` if it isn't one."""
+    if not isinstance(sub, str):
+        return None
+    try:
+        return uuid.UUID(sub)
+    except ValueError:
+        return None
 
 
 async def _actor_principal(actor: Actor, workspace: Workspace) -> Principal:
@@ -131,7 +143,16 @@ async def resolve_credentials(
     if bearer:
         claims = verify_token(bearer)
         if claims and claims.get("workspace") == workspace.slug:
-            if claims.get("role") == ActorRole.owner.value:
+            # Actor tokens carry the actor's *id* as ``sub`` and resolve by id
+            # within this workspace, so a name collision (or a name reused
+            # after an actor is deleted) can never alias a different actor.
+            # Role and grants come from the DB row, not the token.
+            actor_id = _actor_id_from_sub(claims["sub"])
+            if actor_id is not None:
+                actor = await _find_actor_by_id(db, workspace, actor_id)
+                if actor is not None:
+                    return await _actor_principal(actor, workspace)
+            elif claims.get("role") == ActorRole.owner.value and claims["sub"] == workspace.slug:
                 # Token minted from the legacy workspace key acts as owner directly.
                 return Principal(
                     kind=PrincipalKind.legacy_key,
@@ -140,9 +161,6 @@ async def resolve_credentials(
                     permissions=frozenset({Permission.owner}),
                     actor_name=claims["sub"],
                 )
-            actor = await _find_actor_by_name(db, workspace, claims["sub"])
-            if actor is not None:
-                return await _actor_principal(actor, workspace)
         # A presented-but-invalid bearer is an auth failure, not an open request.
         return None
 

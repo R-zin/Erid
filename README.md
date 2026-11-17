@@ -295,7 +295,45 @@ credential shapes are accepted:
 - **Per-actor key** — each actor (person/bot) gets its own key, scoped by role +
   grants. Only its SHA-256 is stored; it's disclosed **once** at minting.
 - **JWT (Ed25519)** — exchange a key for a short-lived bearer token at the login
-  endpoint; send as `Authorization: Bearer <jwt>`.
+  endpoint (or get one via social login, below); send as
+  `Authorization: Bearer <jwt>`. An actor token's `sub` is the actor's **id**,
+  not its name, and is resolved by id within the token's workspace — so a name
+  collision, or a name reused after an actor is deleted, can never make a token
+  act as a different actor. Role and grants are read from the actor row, not the
+  token. (Legacy workspace-key tokens carry `sub` = the slug and act as owner.)
+
+### Social login (Google / GitHub) admission
+
+OAuth login only ever yields a token for an actor **in the workspace named by
+`slug`**, under this policy (checked in order on the callback):
+
+1. **Already linked here.** If this Google/GitHub account is linked to an actor
+   in *this* workspace, it logs in as that actor. Links are per workspace
+   (`oauth_identities` is unique on `(provider, provider_subject, workspace_id)`):
+   a link made in workspace A is never consulted when logging in to B. If that
+   actor was removed or deactivated, login is refused — revocation sticks.
+2. **Invited.** Otherwise, a valid invitation links the account to the actor it
+   names. An admin creates the actor (with the role it should have), then mints
+   an invite:
+
+   ```bash
+   ID=$(curl -s -XPOST -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+     'http://localhost:8000/api/workspaces/myproj/actors' -d '{"name":"alice","role":"writer"}' | jq -r .id)
+   curl -s -XPOST -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+     "http://localhost:8000/api/workspaces/myproj/actors/$ID/oauth-invite" -d '{"email":"alice@example.com"}'
+   # → {"invite": "...", "login_urls": {"github": ".../api/auth/github/login?slug=myproj&invite=...", ...}}
+   ```
+
+   Send the invitee a `login_urls` entry. The invite is signed with
+   `ERID_SESSION_SECRET`, expires after `ERID_OAUTH_INVITE_TTL_SECONDS`
+   (default 7 days), only works for its own workspace, and is **single-use**:
+   it redeems only while the actor has no linked login. The optional `email`
+   pins it to an account whose *provider-verified* email matches; without it,
+   whoever holds the link first can claim the actor, so treat it like a key.
+3. **Self-join (open workspaces only).** Otherwise, a fresh `writer` actor is
+   created — but only if the workspace is **open** (keyless) **and**
+   `ERID_ALLOW_OPEN_WORKSPACES` is on. A **secured** workspace refuses an
+   uninvited account with **403**, as does any workspace in closed mode.
 
 ### Closing off open workspaces (public deployments)
 
@@ -386,6 +424,8 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | POST   | `/workspaces/{slug}/actors`   | admin| mint per-actor key (shown once)  |
 | GET    | `/workspaces/{slug}/actors`   | admin| list actors (never keys)         |
 | DELETE | `/workspaces/{slug}/actors/{id}`| admin | revoke an actor                |
+| POST   | `/workspaces/{slug}/actors/{id}/oauth-invite`| admin | invite a Google/GitHub login to this actor (single-use) |
+| GET    | `/auth/{provider}/login?slug=[&invite=]`| — | start social login (see [admission](#social-login-google--github-admission)) |
 | POST   | `/workspaces/{slug}/token`    | key* | exchange a key for a JWT         |
 | WS     | `/workspaces/{slug}/ws`       | key* | real-time event stream (`?since=<seq>` to resume) |
 | POST   | `/mcp` (no `/api` prefix)     | key* | MCP over Streamable HTTP (`X-Erid-Workspace`) |

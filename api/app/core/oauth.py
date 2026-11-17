@@ -42,6 +42,9 @@ class OAuthProfile:
     email: str | None
     display_name: str
     login: str | None = None  # GitHub handle (preferred actor name); None for Google
+    # True only when the provider asserts ``email`` is verified. Email-pinned
+    # invites match against verified addresses only.
+    email_verified: bool = False
 
 
 PROVIDERS: dict[str, Provider] = {
@@ -84,14 +87,47 @@ def callback_url(provider: str) -> str:
     return f"{settings.oauth_redirect_base}/api/auth/{provider}/callback"
 
 
-def build_authorize_url(provider: str, slug: str) -> str:
+def _invite_serializer() -> URLSafeTimedSerializer:
+    # Distinct salt: an invite can never be replayed as a state, or vice versa.
+    return URLSafeTimedSerializer(settings.session_secret, salt="oauth-invite")
+
+
+def make_invite(*, slug: str, actor_id: str, email: str | None = None) -> str:
+    """Sign an invitation binding a future OAuth login to one existing actor.
+
+    The invite is single-use in effect: it can only be redeemed while the target
+    actor has no linked OAuth identity. ``email`` optionally pins the provider
+    account's (verified) email address.
+    """
+    payload: dict = {"slug": slug, "actor_id": actor_id, "nonce": secrets.token_urlsafe(8)}
+    if email:
+        payload["email"] = email.strip().lower()
+    return _invite_serializer().dumps(payload)
+
+
+def verify_invite(invite: str) -> dict:
+    """Validate a signed invite and return its payload.
+
+    Raises ``SignatureExpired`` (older than ``oauth_invite_ttl_seconds``) or
+    ``BadSignature`` (tampered / not an invite).
+    """
+    payload = _invite_serializer().loads(invite, max_age=settings.oauth_invite_ttl_seconds)
+    if not isinstance(payload, dict) or not payload.get("slug") or not payload.get("actor_id"):
+        raise BadSignature("malformed invite")
+    return payload
+
+
+def build_authorize_url(provider: str, slug: str, invite: str | None = None) -> str:
     """Provider authorization URL with a signed, short-lived ``state``.
 
-    The state carries the target workspace slug and a nonce; it's HMAC-signed
-    with ``ERID_SESSION_SECRET`` so the callback can trust it without storing
-    anything server-side.
+    The state carries the target workspace slug, an optional invite token and a
+    nonce; it's HMAC-signed with ``ERID_SESSION_SECRET`` so the callback can
+    trust it without storing anything server-side.
     """
-    state = _serializer().dumps({"provider": provider, "slug": slug, "nonce": secrets.token_urlsafe(8)})
+    data = {"provider": provider, "slug": slug, "nonce": secrets.token_urlsafe(8)}
+    if invite:
+        data["invite"] = invite
+    state = _serializer().dumps(data)
     params = {
         "client_id": _client_id(provider),
         "redirect_uri": callback_url(provider),
@@ -139,6 +175,7 @@ async def fetch_google_profile(code: str) -> OAuthProfile:
         email=data.get("email"),
         display_name=data.get("name") or data.get("email") or "google-user",
         login=None,
+        email_verified=bool(data.get("email_verified")),
     )
 
 
@@ -162,16 +199,25 @@ async def fetch_github_profile(code: str) -> OAuthProfile:
         user_resp.raise_for_status()
         data = user_resp.json()
         email = data.get("email")
-        if not email:  # private email: pick the primary verified one
-            emails_resp = await http.get("https://api.github.com/user/emails", headers=headers)
-            if emails_resp.is_success:
-                primary = next((e for e in emails_resp.json() if e.get("primary") and e.get("verified")), None)
-                email = primary["email"] if primary else None
+        email_verified = False
+        # The public profile email isn't guaranteed verified; consult the
+        # address list (needs ``user:email``) and prefer the primary verified one.
+        emails_resp = await http.get("https://api.github.com/user/emails", headers=headers)
+        if emails_resp.is_success:
+            entries = emails_resp.json()
+            verified = {e["email"].lower() for e in entries if e.get("verified") and e.get("email")}
+            if email and email.lower() in verified:
+                email_verified = True
+            else:
+                primary = next((e for e in entries if e.get("primary") and e.get("verified")), None)
+                if primary:
+                    email, email_verified = primary["email"], True
     return OAuthProfile(
         subject=str(data["id"]),
         email=email,
         display_name=data.get("name") or data.get("login") or "github-user",
         login=data.get("login"),
+        email_verified=email_verified,
     )
 
 
@@ -184,5 +230,7 @@ __all__ = [
     "configured",
     "fetch_github_profile",
     "fetch_google_profile",
+    "make_invite",
+    "verify_invite",
     "verify_state",
 ]

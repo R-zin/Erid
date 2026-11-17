@@ -134,15 +134,22 @@ class OAuthIdentity(Base):
     """Links an external OAuth account (Google/GitHub) to a workspace ``Actor``.
 
     OAuth is only an alternate way to mint the internal JWT: a successful
-    social login resolves to a real ``Actor`` row (role ``writer``, no API key)
-    and signs a token for it. ``provider`` + ``provider_subject`` is unique, so
-    a given external account always maps to the same actor across logins.
+    social login resolves to a real ``Actor`` row and signs a token for it.
+
+    Identities are scoped **per workspace**: ``(provider, provider_subject,
+    workspace_id)`` is unique, so one external account maps to at most one
+    actor in each workspace and a link made in workspace A never resolves in
+    workspace B. ``workspace_id`` is denormalized from the actor so the lookup
+    and the constraint need no join; it always equals ``actor.workspace_id``.
     """
 
     __tablename__ = "oauth_identities"
-    __table_args__ = (UniqueConstraint("provider", "provider_subject", name="uq_oauth_provider_subject"),)
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_subject", "workspace_id", name="uq_oauth_provider_subject_workspace"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     provider: Mapped[str] = mapped_column(String(32))  # "google" | "github"
     provider_subject: Mapped[str] = mapped_column(String(255))  # stable account id from the provider
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)

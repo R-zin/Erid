@@ -161,7 +161,8 @@ async def exchange_key_for_token(db: AsyncSession, slug: str, raw_key: str) -> A
         raise NotFound(f"workspace '{slug}' not found")
 
     if key_matches(raw_key, workspace.api_key_hash):
-        name, role = workspace.slug, ActorRole.owner  # legacy key acts as owner
+        # Legacy key acts as owner; its subject is the workspace slug.
+        token = issue_token(workspace_slug=slug, subject=workspace.slug, role=ActorRole.owner.value)
     else:
         actor = (
             (
@@ -180,9 +181,6 @@ async def exchange_key_for_token(db: AsyncSession, slug: str, raw_key: str) -> A
         )
         if actor is None:
             raise Forbidden("invalid api key")
-        name, role = actor.name, actor.role
+        token = issue_token(workspace_slug=slug, subject=str(actor.id), role=actor.role.value, name=actor.name)
 
-    return ActorToken(
-        access_token=issue_token(workspace_slug=slug, actor_name=name, role=role.value if role else None),
-        expires_in=settings.jwt_ttl_seconds,
-    )
+    return ActorToken(access_token=token, expires_in=settings.jwt_ttl_seconds)

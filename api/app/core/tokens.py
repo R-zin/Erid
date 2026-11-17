@@ -38,17 +38,32 @@ def _load_signing_key() -> tuple[Ed25519PrivateKey, Ed25519PublicKey]:
 _PRIVATE_KEY, _PUBLIC_KEY = _load_signing_key()
 
 
-def issue_token(*, workspace_slug: str, actor_name: str, role: str | None = None) -> str:
-    """Sign a short-lived access token identifying an actor in a workspace."""
+def issue_token(
+    *,
+    workspace_slug: str,
+    subject: str,
+    role: str | None = None,
+    name: str | None = None,
+) -> str:
+    """Sign a short-lived access token identifying a principal in a workspace.
+
+    ``subject`` is the actor's **id** (``str(actor.id)``) for actor tokens, so a
+    token can never alias a different actor that happens to share a name. The
+    only other form is the legacy workspace-key token, whose subject is the
+    workspace slug with ``role="owner"``. ``name`` is informational (display /
+    attribution hints for clients); verification never trusts it.
+    """
     now = datetime.now(UTC)
     claims = {
-        "sub": actor_name,
+        "sub": subject,
         "workspace": workspace_slug,
         "role": role,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=settings.jwt_ttl_seconds)).timestamp()),
         "iss": "context-hub",
     }
+    if name is not None:
+        claims["name"] = name
     return jwt.encode(claims, _PRIVATE_KEY, algorithm="EdDSA")
 
 

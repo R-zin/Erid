@@ -201,6 +201,27 @@ class ActorCreated(ActorOut):
     api_key: str | None
 
 
+class OAuthInviteIn(BaseModel):
+    """Optional constraints on an OAuth invitation."""
+
+    # When set, only a provider account whose *verified* email matches may redeem it.
+    email: str | None = Field(default=None, max_length=255)
+
+
+class OAuthInvite(BaseModel):
+    """A signed, single-use invitation linking a Google/GitHub login to an actor.
+
+    Shown once; hand the matching ``login_urls`` entry to the invitee.
+    """
+
+    actor_id: uuid.UUID
+    actor_name: str
+    invite: str
+    email: str | None
+    expires_in: int
+    login_urls: dict[str, str]
+
+
 class SearchResults(BaseModel):
     query: str
     decisions: list[DecisionOut]

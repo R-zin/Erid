@@ -1,10 +1,11 @@
 import React, { useState } from 'react'
 import TaskCreateForm from './TaskCreateForm.jsx'
+import SectionHeader from './SectionHeader.jsx'
 
 const STATUS_ORDER = { in_progress: 0, blocked: 1, todo: 2, done: 3 }
 const STATUSES = ['todo', 'in_progress', 'blocked', 'done']
 
-export default function TaskList({ tasks, client, canWrite, onMutate, agentFilter = 'all' }) {
+export default function TaskList({ tasks, client, canWrite, onMutate, agentFilter = 'all', index }) {
   const [createError, setCreateError] = useState(null)
   const [rowError, setRowError] = useState(null)
 
@@ -54,20 +55,14 @@ export default function TaskList({ tasks, client, canWrite, onMutate, agentFilte
   const openCount = tasks.filter((t) => t.status !== 'done').length
 
   return (
-    <div className="card-panel">
-      <div className="card-header">
-        <div className="card-title-group">
-          <h3 className="card-title">Active Tasks</h3>
-          <span className="count-tag">
-            {String(openCount).padStart(2, '0')} open
-          </span>
-        </div>
-        <span className="material-symbols-outlined muted" style={{ fontSize: 18 }}>
-          task_alt
-        </span>
-      </div>
+    <section className="card-panel" aria-label="Tasks">
+      <SectionHeader
+        index={index}
+        title="Tasks"
+        meta={<span className="count-tag">{String(openCount).padStart(2, '0')} open</span>}
+      />
 
-      <div className="card-body" style={{ paddingBottom: 8 }}>
+      <div className="card-body">
         <TaskCreateForm
           client={client}
           disabled={!client}
@@ -85,68 +80,52 @@ export default function TaskList({ tasks, client, canWrite, onMutate, agentFilte
       </div>
 
       {sorted.length === 0 ? (
-        <div className="empty-placeholder" style={{ padding: '24px 16px' }}>
-          No tasks found matching filter.
-        </div>
+        <div className="empty-placeholder">No tasks match this filter.</div>
       ) : (
         <ul className="stream-list">
           {sorted.map((t) => {
             const shortId = t.id ? String(t.id).slice(0, 6) : 'NEW'
             return (
-              <li
-                key={t.id}
-                className={`stream-item${t.__optimistic ? ' optimistic' : ''}`}
-              >
-                <div className="task-top-meta">
-                  <span className={`badge ${t.status}`}>
-                    {t.status.replace('_', ' ')}
+              <li key={t.id} className={`stream-item${t.__optimistic ? ' optimistic' : ''}`}>
+                <div className="task-row">
+                  <span>
+                    <span className={`badge ${t.status}`}>{t.status.replace('_', ' ')}</span>
                   </span>
-                  <span className="task-id">#TK-{shortId}</span>
-                </div>
-
-                <h4 className={`task-heading ${t.status === 'done' ? 'done' : ''}`}>
-                  {t.title}
-                </h4>
-
-                <div className="task-bottom-meta">
-                  <span className="agent-tag">
-                    <span className="material-symbols-outlined" style={{ fontSize: 13, color: 'var(--surface-tint)' }}>
-                      {t.assigned_to && /(claude|cursor|codex|agent)/i.test(t.assigned_to) ? 'smart_toy' : 'person'}
-                    </span>
-                    Agent: {t.assigned_to || 'Unassigned'}
-                  </span>
-
-                  {canWrite && client && !t.__optimistic && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <select
-                        aria-label={`Set status for ${t.title}`}
-                        value={t.status}
-                        onChange={(e) => changeStatus(t, e.target.value)}
-                        style={{ padding: '3px 6px', fontSize: 11 }}
-                      >
-                        {STATUSES.map((s) => (
-                          <option key={s} value={s}>
-                            {s.replace('_', ' ')}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="ghost danger"
-                        aria-label={`Delete ${t.title}`}
-                        onClick={() => removeTask(t)}
-                        style={{ padding: '2px 6px', fontSize: 11 }}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  )}
+                  <span className="task-id">TK-{shortId}</span>
+                  <h3 className={`task-heading ${t.status === 'done' ? 'done' : ''}`}>{t.title}</h3>
+                  <div className="task-row-actions">
+                    <span className="task-assignee">{t.assigned_to ? `@${t.assigned_to}` : 'unassigned'}</span>
+                    {canWrite && client && !t.__optimistic && (
+                      <>
+                        <select
+                          aria-label={`Set status for ${t.title}`}
+                          value={t.status}
+                          onChange={(e) => changeStatus(t, e.target.value)}
+                          style={{ padding: '3px 6px', fontSize: 11 }}
+                        >
+                          {STATUSES.map((s) => (
+                            <option key={s} value={s}>
+                              {s.replace('_', ' ')}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="ghost danger icon"
+                          aria-label={`Delete ${t.title}`}
+                          onClick={() => removeTask(t)}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               </li>
             )
           })}
         </ul>
       )}
-    </div>
+    </section>
   )
 }

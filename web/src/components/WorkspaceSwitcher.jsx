@@ -84,16 +84,14 @@ export default function WorkspaceSwitcher({
   return (
     <div style={{ position: 'relative' }}>
       <div className="switcher-row">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span className="small muted" style={{ textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600, fontSize: 10 }}>
-            Workspace
-          </span>
+        <div className="switcher-pick">
+          <span className="label switcher-label">Workspace</span>
           <select
             id="ws-select"
             value={activeSlug}
             onChange={(e) => onSelect(e.target.value)}
             aria-label="active workspace"
-            style={{ fontWeight: 600, color: 'var(--primary)', padding: '5px 10px' }}
+            className="switcher-select"
           >
             {workspaces.length === 0 && <option value="">— none saved —</option>}
             {activeSlug === '' && workspaces.length > 0 && <option value="">— select —</option>}

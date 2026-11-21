@@ -94,7 +94,7 @@ export function useWorkspace(slug, credential, authType) {
           return
         }
         if (typeof event.seq === 'number') lastSeq = Math.max(lastSeq ?? 0, event.seq)
-        setLastEvent({ type: event.type, data: event.data, ts: Date.now() })
+        setLastEvent({ type: event.type, data: event.data, seq: event.seq ?? null, ts: Date.now() })
         if (event.type === 'workspace_deleted') {
           setError(`Workspace '${slug}' was deleted.`)
           ws.close() // deliberate; onclose sees wsRef.current !== ws → no reconnect

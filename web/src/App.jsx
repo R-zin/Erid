@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useWorkspace } from './useWorkspace.js'
 import { useWorkspaces } from './useWorkspaces.js'
 import { makeClient } from './api.js'
+import { useTheme } from './useTheme.js'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher.jsx'
 import LiveWorkspace from './pages/LiveWorkspace.jsx'
 import ContinuousContext from './pages/ContinuousContext.jsx'
@@ -16,6 +17,8 @@ export default function App() {
     removeWorkspace,
     selectWorkspace,
   } = useWorkspaces()
+
+  const { theme, toggle: toggleTheme } = useTheme()
 
   // Default page: 'workspace' (can switch to 'continuous-context' | 'field-guide')
   const [currentPage, setCurrentPage] = useState('workspace')
@@ -64,66 +67,52 @@ export default function App() {
 
   const isAuthError = !!error && /authentication failed/i.test(error)
 
+  const PAGES = [
+    { id: 'workspace', label: 'Workspace' },
+    { id: 'continuous-context', label: 'Continuous Context' },
+    { id: 'field-guide', label: 'Field Guide' },
+  ]
+
   return (
     <div className="app-wrapper">
-      {/* Top Header Bar matching Stitch */}
       <header className="top-header">
         <div className="top-header-inner">
           <div className="brand-group">
-            <div className="brand-logo" onClick={() => setCurrentPage('workspace')}>
-              erid<span className="brand-dot">.</span>
-            </div>
-
-            <div className="protocol-badge">
+            <button
+              type="button"
+              className="brand-logo"
+              onClick={() => setCurrentPage('workspace')}
+              aria-label="Erid home"
+            >
+              Erid<span className="brand-dot">.</span>
+            </button>
+            <span className="brand-slash" aria-hidden="true">/</span>
+            <span className="live-pill" title={connected ? 'WebSocket connected' : 'WebSocket disconnected'}>
               <span className={`pulse-indicator ${connected ? 'live' : 'offline'}`}>
                 <span className="dot-core" />
               </span>
-              <span>Protocol v0.1 • {connected ? 'WS Active' : 'WS Disconnected'}</span>
-            </div>
+              {connected ? 'Live' : 'Offline'}
+            </span>
           </div>
 
-          <nav className="top-nav">
-            <button
-              type="button"
-              className={`nav-link ${currentPage === 'workspace' ? 'active' : ''}`}
-              onClick={() => setCurrentPage('workspace')}
-            >
-              Live Workspace
-            </button>
-            <button
-              type="button"
-              className={`nav-link ${currentPage === 'continuous-context' ? 'active' : ''}`}
-              onClick={() => setCurrentPage('continuous-context')}
-            >
-              Continuous Context
-            </button>
-            <button
-              type="button"
-              className={`nav-link ${currentPage === 'field-guide' ? 'active' : ''}`}
-              onClick={() => setCurrentPage('field-guide')}
-            >
-              Clean Field Guide
-            </button>
-            <a
-              className="nav-link"
-              href="https://github.com/R-zin/Erid"
-              target="_blank"
-              rel="noreferrer"
-            >
+          <nav className="top-nav" aria-label="Primary">
+            {PAGES.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`nav-link ${currentPage === p.id ? 'active' : ''}`}
+                aria-current={currentPage === p.id ? 'page' : undefined}
+                onClick={() => setCurrentPage(p.id)}
+              >
+                {p.label}
+              </button>
+            ))}
+            <a className="nav-link" href="https://github.com/R-zin/Erid" target="_blank" rel="noreferrer">
               GitHub
             </a>
           </nav>
 
           <div className="header-actions">
-            <button
-              type="button"
-              className="primary"
-              onClick={() => setCurrentPage('workspace')}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', fontSize: 12 }}
-            >
-              <span>Connect Client</span>
-              <span className="material-symbols-outlined" style={{ fontSize: 15 }}>arrow_forward</span>
-            </button>
             <WorkspaceSwitcher
               workspaces={workspaces}
               active={active}
@@ -132,11 +121,11 @@ export default function App() {
               onSave={upsertWorkspace}
               onRemove={removeWorkspace}
             />
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </div>
       </header>
 
-      {/* Main Page Content */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         {currentPage === 'workspace' && (
           <LiveWorkspace
@@ -148,6 +137,7 @@ export default function App() {
             presence={presence}
             client={client}
             credential={credential}
+            authType={authType}
             error={error}
             isAuthError={isAuthError}
             activeSlug={activeSlug}
@@ -164,50 +154,64 @@ export default function App() {
         {currentPage === 'field-guide' && (
           <CleanFieldGuide onNavigateWorkspace={() => setCurrentPage('workspace')} />
         )}
+
+        <footer className="site-footer">
+          <span>Erid · Shared context for AI coding tools</span>
+          <nav aria-label="Footer">
+            <a href="https://github.com/R-zin/Erid#readme" target="_blank" rel="noreferrer">Docs</a>
+            <a href="https://github.com/R-zin/Erid/blob/main/api/openapi.json" target="_blank" rel="noreferrer">API (OpenAPI)</a>
+            <a href="https://github.com/R-zin/Erid" target="_blank" rel="noreferrer">GitHub</a>
+          </nav>
+        </footer>
       </div>
 
-      {/* Pinned Real-Time RPC Stream Ticker (Bottom Edge) */}
-      <footer className="rpc-stream-footer">
-        <div className="rpc-pill">
-          <span className={`pulse-indicator ${connected ? 'live' : 'offline'}`} style={{ width: 6, height: 6 }}>
-            <span className="dot-core" />
-          </span>
-          <span>RPC STREAM</span>
-        </div>
-        <div className="rpc-stream-content">
-          {lastEvent ? (
-            <span>
-              <span className="rpc-key">{"{"}"event": </span>
-              <span className="rpc-val">"{lastEvent.type}"</span>
-              <span className="rpc-key">, "ts": </span>
-              <span className="rpc-val">{Math.floor(lastEvent.ts / 1000)}</span>
-              {lastEvent.data?.id && (
-                <>
-                  <span className="rpc-key">, "id": </span>
-                  <span className="rpc-val">"{lastEvent.data.id}"</span>
-                </>
-              )}
-              {lastEvent.data?.title && (
-                <>
-                  <span className="rpc-key">, "title": </span>
-                  <span className="rpc-val">"{lastEvent.data.title}"</span>
-                </>
-              )}
-              <span className="rpc-key">{"}"}</span>
-            </span>
-          ) : (
-            <span>
-              <span className="rpc-key">{"{"}"status": </span>
-              <span className="rpc-val">"{connected ? 'listening_on_mesh' : 'awaiting_connection'}"</span>
-              <span className="rpc-key">, "workspace": </span>
-              <span className="rpc-val">"{slug || 'none'}"</span>
-              <span className="rpc-key">, "transport": </span>
-              <span className="rpc-val">"websocket_push"</span>
-              <span className="rpc-key">{"}"}</span>
-            </span>
-          )}
-        </div>
-      </footer>
+      <EventStream connected={connected} lastEvent={lastEvent} slug={slug} />
     </div>
+  )
+}
+
+function ThemeToggle({ theme, onToggle }) {
+  const next = theme === 'dark' ? 'light' : 'dark'
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={onToggle}
+      aria-label={`Switch to ${next} mode`}
+      title={`Switch to ${next} mode`}
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden="true">
+        {theme === 'dark' ? 'light_mode' : 'dark_mode'}
+      </span>
+    </button>
+  )
+}
+
+function EventStream({ connected, lastEvent, slug }) {
+  const time = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false })
+  const subject = (e) => e.data?.title || e.data?.summary || e.data?.actor_name || e.data?.slug || ''
+  return (
+    <footer className="rpc-stream-footer" aria-live="polite">
+      <div className="rpc-pill">
+        <span className={`pulse-indicator ${connected ? 'live' : 'offline'}`} style={{ width: 6, height: 6 }}>
+          <span className="dot-core" />
+        </span>
+        <span>Event stream</span>
+      </div>
+      <div className="rpc-stream-content">
+        {lastEvent ? (
+          <span>
+            <span className="rpc-time">[{time(lastEvent.ts)}]</span>{' '}
+            <span className="rpc-type">{lastEvent.type}</span>
+            {subject(lastEvent) && <span>: &ldquo;{subject(lastEvent)}&rdquo;</span>}
+          </span>
+        ) : (
+          <span className="rpc-key">
+            {!slug ? 'No workspace selected' : connected ? `Listening on ${slug}…` : 'Waiting for connection…'}
+          </span>
+        )}
+      </div>
+      {lastEvent?.seq != null && <span className="rpc-seq">seq {lastEvent.seq}</span>}
+    </footer>
   )
 }

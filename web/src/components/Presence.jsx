@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
+import SectionHeader from './SectionHeader.jsx'
 
-export default function Presence({ presence, agentFilter = 'all', client = null, canWrite = false }) {
+export default function Presence({ presence, agentFilter = 'all', client = null, canWrite = false, index }) {
   const [showCheckIn, setShowCheckIn] = useState(false)
   const [actorName, setActorName] = useState('Web Client')
   const [currentTask, setCurrentTask] = useState('')
@@ -20,7 +21,7 @@ export default function Presence({ presence, agentFilter = 'all', client = null,
         current_task: currentTask.trim() || null,
         current_file: currentFile.trim() || null,
       })
-      setCheckInMsg('Presence broadcasted!')
+      setCheckInMsg('Presence sent.')
       setTimeout(() => {
         setShowCheckIn(false)
         setCheckInMsg(null)
@@ -42,66 +43,51 @@ export default function Presence({ presence, agentFilter = 'all', client = null,
   })
 
   return (
-    <div className="card-panel">
-      <div className="card-header">
-        <div className="card-title-group">
-          <span className="pulse-indicator live" style={{ width: 8, height: 8 }}>
-            <span className="dot-core" style={{ background: 'var(--green)' }} />
-          </span>
-          <h3 className="card-title">Presence Feed</h3>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {canWrite && client && (
-            <button
-              type="button"
-              className="ghost"
-              style={{ fontSize: 11, padding: '2px 8px' }}
-              onClick={() => setShowCheckIn((v) => !v)}
-            >
-              {showCheckIn ? 'Close' : 'Check In'}
-            </button>
-          )}
-          <span className="count-tag" style={{ color: 'var(--green)', borderColor: 'var(--green)' }}>LIVE</span>
-        </div>
-      </div>
+    <section className="card-panel" aria-label="Presence">
+      <SectionHeader
+        index={index}
+        title="Presence"
+        meta={<span className="count-tag accent">{presence.length} online</span>}
+      >
+        {canWrite && client && (
+          <button type="button" className="ghost small" onClick={() => setShowCheckIn((v) => !v)}>
+            {showCheckIn ? 'Close' : 'Check In'}
+          </button>
+        )}
+      </SectionHeader>
 
       {showCheckIn && (
-        <form onSubmit={handleCheckIn} style={{ padding: '12px 16px', background: 'var(--surface-container-low)', borderBottom: 'var(--border-hairline)' }}>
+        <form onSubmit={handleCheckIn} className="card-body" style={{ borderBottom: 'var(--border-hairline)', paddingBottom: 12 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <span style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)', textTransform: 'uppercase', color: 'var(--on-surface-variant)' }}>
-              Broadcast Presence Heartbeat
-            </span>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <span className="label">Broadcast presence</span>
+            <div className="task-create-row">
               <input
                 value={actorName}
                 onChange={(e) => setActorName(e.target.value)}
-                placeholder="Your Name / Handle"
+                placeholder="Your name / handle"
                 aria-label="presence actor name"
                 required
-                style={{ fontSize: 12, padding: '4px 8px' }}
               />
               <input
                 value={currentTask}
                 onChange={(e) => setCurrentTask(e.target.value)}
                 placeholder="Current task (optional)"
                 aria-label="presence task"
-                style={{ fontSize: 12, padding: '4px 8px' }}
               />
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div className="task-create-row">
               <input
                 value={currentFile}
                 onChange={(e) => setCurrentFile(e.target.value)}
                 placeholder="Active file (optional)"
                 aria-label="presence file"
-                style={{ fontSize: 12, padding: '4px 8px' }}
               />
-              <button type="submit" className="primary" disabled={busy || !actorName.trim()} style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
-                {busy ? 'Broadcasting…' : 'Broadcast'}
+              <button type="submit" className="primary" disabled={busy || !actorName.trim()} style={{ whiteSpace: 'nowrap' }}>
+                {busy ? 'Sending…' : 'Broadcast'}
               </button>
             </div>
             {checkInMsg && (
-              <span style={{ fontSize: 11, color: checkInMsg.includes('failed') ? 'var(--error)' : 'var(--green-text)', fontFamily: 'var(--font-mono)' }}>
+              <span className="mono small" style={{ color: checkInMsg.includes('failed') ? 'var(--error)' : 'var(--green-text)' }}>
                 {checkInMsg}
               </span>
             )}
@@ -109,47 +95,32 @@ export default function Presence({ presence, agentFilter = 'all', client = null,
         </form>
       )}
 
-      <div className="card-body" style={{ padding: '12px 16px' }}>
-        {filtered.length === 0 ? (
-          <div className="empty-placeholder">No active agents or developers matching filter.</div>
-        ) : (
-          <ul className="stream-list">
-            {filtered.map((p) => {
-              const isAi = p.actor_type !== 'human'
-              return (
-                <li key={p.id} className="presence-item">
-                  <div className={`presence-indicator-dot ${isAi ? 'ai' : 'human'}`} />
-                  <div className="presence-content">
-                    <div>
-                      <span className="presence-actor">[{p.actor_name}]</span>
-                      <span className="muted small"> ({p.actor_type})</span>
-                    </div>
-                    {p.current_task && (
-                      <div className="presence-task">
-                        <span className="muted">▸ </span>
-                        {p.current_task}
-                      </div>
-                    )}
-                    {p.current_file && (
-                      <div className="presence-file">
-                        📄 {p.current_file}
-                      </div>
-                    )}
-                    <div className="presence-time">{timeAgo(p.last_seen)}</div>
+      {filtered.length === 0 ? (
+        <div className="empty-placeholder">No active agents or developers match this filter.</div>
+      ) : (
+        <ul className="stream-list">
+          {filtered.map((p) => {
+            const isAi = p.actor_type !== 'human'
+            return (
+              <li key={p.id} className="presence-item">
+                <div className={`presence-indicator-dot ${isAi ? 'ai' : 'human'}`} />
+                <div className="presence-content">
+                  <div className="presence-head">
+                    <span>
+                      <span className="presence-actor">{p.actor_name}</span>
+                      <span className="presence-kind">{isAi ? 'Agent' : 'Human'}</span>
+                    </span>
+                    <span className="presence-time">{timeAgo(p.last_seen)}</span>
                   </div>
-                </li>
-              )
-            })}
-          </ul>
-        )}
-      </div>
-
-      <div style={{ padding: '8px 16px', background: 'var(--surface-low)', borderTop: 'var(--border-hairline)', textAlign: 'center' }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--on-surface-variant)' }}>
-          Heartbeat interval: 1500ms • Active Mesh
-        </span>
-      </div>
-    </div>
+                  {p.current_task && <div className="presence-task">{p.current_task}</div>}
+                  {p.current_file && <div className="presence-file">{p.current_file}</div>}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
   )
 }
 

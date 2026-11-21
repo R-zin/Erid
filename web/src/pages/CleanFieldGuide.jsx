@@ -64,7 +64,7 @@ export default function CleanFieldGuide({ onNavigateWorkspace }) {
                     borderRadius: 4,
                     border: 'none',
                     background: activeSection === s.id ? 'var(--primary-container)' : 'transparent',
-                    color: activeSection === s.id ? '#ffffff' : 'var(--on-surface)',
+                    color: activeSection === s.id ? 'var(--on-primary)' : 'var(--on-surface)',
                     cursor: 'pointer',
                     textAlign: 'left',
                     fontSize: 13,

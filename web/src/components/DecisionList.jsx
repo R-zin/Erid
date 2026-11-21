@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
 import DecisionCreateForm from './DecisionCreateForm.jsx'
+import SectionHeader from './SectionHeader.jsx'
 
-export default function DecisionList({ decisions, client, canWrite, tasks = [], onMutate, agentFilter = 'all' }) {
+export default function DecisionList({ decisions, client, canWrite, tasks = [], onMutate, agentFilter = 'all', index }) {
   const [createError, setCreateError] = useState(null)
   const [rowError, setRowError] = useState(null)
   const taskTitle = (id) => (id ? tasks.find((t) => t.id === id)?.title : null)
@@ -38,20 +39,14 @@ export default function DecisionList({ decisions, client, canWrite, tasks = [], 
   }
 
   return (
-    <div className="card-panel">
-      <div className="card-header">
-        <div className="card-title-group">
-          <h3 className="card-title">Recent Decisions</h3>
-          <span className="count-tag">
-            {String(decisions.length).padStart(2, '0')} logged
-          </span>
-        </div>
-        <span className="material-symbols-outlined muted" style={{ fontSize: 18 }}>
-          psychology
-        </span>
-      </div>
+    <section className="card-panel" aria-label="Decisions">
+      <SectionHeader
+        index={index}
+        title="Decisions"
+        meta={<span className="count-tag">{String(decisions.length).padStart(2, '0')} recorded</span>}
+      />
 
-      <div className="card-body" style={{ paddingBottom: 8 }}>
+      <div className="card-body">
         {onMutate && (
           <DecisionCreateForm
             client={client}
@@ -72,66 +67,48 @@ export default function DecisionList({ decisions, client, canWrite, tasks = [], 
       </div>
 
       {filtered.length === 0 ? (
-        <div className="empty-placeholder" style={{ padding: '24px 16px' }}>
-          No decisions recorded yet.
-        </div>
+        <div className="empty-placeholder">No decisions recorded yet.</div>
       ) : (
         <ul className="stream-list">
           {filtered.map((d, index) => (
-            <li
-              key={d.id}
-              className={`stream-item${d.__optimistic ? ' optimistic' : ''}`}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--primary)' }}>
+            <li key={d.id} className={`stream-item${d.__optimistic ? ' optimistic' : ''}`}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                <h3 className="row-title">
+                  <span className="row-id">DEC-{String(d.id).slice(0, 4)}</span>
                   {d.title}
-                </h4>
-                {canWrite && client && !d.__optimistic && (
-                  <button
-                    type="button"
-                    className="ghost danger"
-                    aria-label={`Delete ${d.title}`}
-                    onClick={() => removeDecision(d, index)}
-                    style={{ padding: '2px 6px', fontSize: 11 }}
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-
-              {d.reason && (
-                <p style={{ margin: '4px 0', fontSize: 13, color: 'var(--on-surface-variant)', lineHeight: 1.4 }}>
-                  {d.reason}
-                </p>
-              )}
-
-              <div className="task-bottom-meta" style={{ marginTop: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  {d.made_by && (
-                    <span className="agent-tag">
-                      by {d.made_by}
-                    </span>
-                  )}
-                  {taskTitle(d.task_id) && (
-                    <span className="agent-tag">
-                      ↳ {taskTitle(d.task_id)}
-                    </span>
-                  )}
-                  {d.related_files && (
-                    <span className="agent-tag" style={{ fontFamily: 'var(--font-mono)' }}>
-                      📄 {d.related_files}
-                    </span>
+                </h3>
+                <div className="btn-row" style={{ flex: 'none' }}>
+                  <span className="agent-tag">
+                    {d.made_by && <>by <strong style={{ color: 'var(--on-surface)' }}>{d.made_by}</strong> · </>}
+                    {d.created_at
+                      ? new Date(d.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })
+                      : 'now'}
+                  </span>
+                  {canWrite && client && !d.__optimistic && (
+                    <button
+                      type="button"
+                      className="ghost danger icon"
+                      aria-label={`Delete ${d.title}`}
+                      onClick={() => removeDecision(d, index)}
+                    >
+                      ✕
+                    </button>
                   )}
                 </div>
-
-                <span>
-                  {new Date(d.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
-                </span>
               </div>
+
+              {d.reason && <p className="row-text">{d.reason}</p>}
+
+              {(taskTitle(d.task_id) || d.related_files) && (
+                <div className="btn-row" style={{ marginTop: 8 }}>
+                  {taskTitle(d.task_id) && <span className="agent-tag">↳ {taskTitle(d.task_id)}</span>}
+                  {d.related_files && <span className="agent-tag">{d.related_files}</span>}
+                </div>
+              )}
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </section>
   )
 }

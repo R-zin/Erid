@@ -7,15 +7,15 @@ import HandoffList from './components/HandoffList.jsx'
 import DecisionList from './components/DecisionList.jsx'
 import WorkspaceSwitcher from './components/WorkspaceSwitcher.jsx'
 
-describe('Nordic Editorial UI Components', () => {
+describe('Swiss Editorial UI Components', () => {
   describe('Presence component', () => {
     it('renders empty presence placeholder', () => {
       const html = renderToString(<Presence presence={[]} />)
-      expect(html).toContain('Presence Feed')
+      expect(html).toContain('>Presence<')
       expect(html).toContain('No active agents')
     })
 
-    it('renders human and AI presence items with Nordic badges', () => {
+    it('renders human and AI presence items', () => {
       const sample = [
         {
           id: 'p1',
@@ -67,7 +67,7 @@ describe('Nordic Editorial UI Components', () => {
       const html = renderToString(
         <TaskList tasks={tasks} client={null} canWrite={false} onMutate={() => {}} />
       )
-      expect(html).toContain('Active Tasks')
+      expect(html).toContain('>Tasks<')
       expect(html).toContain('Implement Redis pub/sub backoff')
       expect(html).toContain('Sync git diff schema')
       expect(html).toContain('tk1000')
@@ -93,7 +93,7 @@ describe('Nordic Editorial UI Components', () => {
       const html = renderToString(
         <HandoffList handoffs={handoffs} client={null} canWrite={true} onMutate={() => {}} />
       )
-      expect(html).toContain('Session Handoffs')
+      expect(html).toContain('>Handoffs<')
       expect(html).toContain('Auth middleware refactor complete')
       expect(html).toContain('Run integration test validation')
       expect(html).toContain('feature/auth')
@@ -116,7 +116,7 @@ describe('Nordic Editorial UI Components', () => {
       const html = renderToString(
         <DecisionList decisions={decisions} client={null} canWrite={false} onMutate={() => {}} />
       )
-      expect(html).toContain('Recent Decisions')
+      expect(html).toContain('>Decisions<')
       expect(html).toContain('Use Redis pub/sub for cross-agent event distribution')
       expect(html).toContain('architect')
     })
@@ -176,10 +176,25 @@ describe('Nordic Editorial UI Components', () => {
       expect(html).toContain('test-hub')
       expect(html).toContain('Search context in test-hub')
       expect(html).toContain('Open Tasks')
-      expect(html).toContain('Pending Handoff')
+      expect(html).toContain('Pending Handoffs')
+      expect(html).toContain('In Progress')
+      expect(html).toContain('Active Now')
+      // Numbered editorial sections, in reading order.
+      const order = ['01', '02', '03', '04'].map((n) => html.indexOf(`section-num">${n}<`))
+      expect(order.every((i) => i > -1)).toBe(true)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
       expect(html).toContain('Task 1')
       expect(html).toContain('Decision 1')
     })
   })
-})
 
+  describe('SectionHeader', () => {
+    it('zero-pads the section number', async () => {
+      const { default: SectionHeader } = await import('./components/SectionHeader.jsx')
+      const html = renderToString(<SectionHeader index={3} title="Presence" />)
+      expect(html).toContain('section-num')
+      expect(html).toContain('>03<')
+      expect(html).toContain('>Presence<')
+    })
+  })
+})

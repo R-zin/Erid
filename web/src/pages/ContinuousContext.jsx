@@ -143,24 +143,24 @@ export default function ContinuousContext({ onNavigateWorkspace }) {
 
             {/* Column 2: Central Hub Core */}
             <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <div style={{ width: '100%', maxWidth: 360, background: 'var(--primary-container)', color: '#ffffff', borderRadius: 12, padding: 20, boxShadow: 'var(--shadow-md)', position: 'relative', overflow: 'hidden' }}>
+              <div style={{ width: '100%', maxWidth: 360, background: 'var(--primary-container)', color: 'var(--on-primary)', borderRadius: 12, padding: 20, boxShadow: 'var(--shadow-md)', position: 'relative', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.15)', paddingBottom: 10, marginBottom: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span className="material-symbols-outlined" style={{ color: 'var(--secondary-container)', fontSize: 22 }}>hub</span>
-                    <span style={{ fontFamily: 'var(--font-serif)', fontSize: 18, color: '#ffffff' }}>Erid Core Bus</span>
+                    <span style={{ fontFamily: 'var(--font-serif)', fontSize: 18, color: 'var(--on-primary)' }}>Erid Core Bus</span>
                   </div>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 6px', background: 'rgba(255,255,255,0.1)', borderRadius: 4 }}>v0.1-rc3</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 6px', background: 'color-mix(in srgb, var(--on-primary) 10%, transparent)', borderRadius: 4 }}>v0.1-rc3</span>
                 </div>
-                <p style={{ fontSize: 12, lineHeight: 1.5, color: '#b3ccc8', margin: '0 0 16px' }}>
+                <p style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--on-primary)', opacity: 0.75, margin: '0 0 16px' }}>
                   In-memory vector sync and AST diff indexer routing unified MCP events without session loss.
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                  <div style={{ background: 'rgba(255,255,255,0.06)', padding: '6px 8px', borderRadius: 4 }}>
-                    <div style={{ color: '#768e8b', fontSize: 10 }}>Active Locks</div>
-                    <div style={{ color: '#ffffff', fontWeight: 600 }}>1 Mutex (auth.py)</div>
+                  <div style={{ background: 'color-mix(in srgb, var(--on-primary) 7%, transparent)', padding: '6px 8px', borderRadius: 4 }}>
+                    <div style={{ color: 'var(--on-primary)', opacity: 0.6, fontSize: 10 }}>Active Locks</div>
+                    <div style={{ color: 'var(--on-primary)', fontWeight: 600 }}>1 Mutex (auth.py)</div>
                   </div>
-                  <div style={{ background: 'rgba(255,255,255,0.06)', padding: '6px 8px', borderRadius: 4 }}>
-                    <div style={{ color: '#768e8b', fontSize: 10 }}>Vector Dedupe</div>
+                  <div style={{ background: 'color-mix(in srgb, var(--on-primary) 7%, transparent)', padding: '6px 8px', borderRadius: 4 }}>
+                    <div style={{ color: 'var(--on-primary)', opacity: 0.6, fontSize: 10 }}>Vector Dedupe</div>
                     <div style={{ color: 'var(--secondary-container)', fontWeight: 600 }}>99.8% hit rate</div>
                   </div>
                 </div>

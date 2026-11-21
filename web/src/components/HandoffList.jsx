@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
 import HandoffCreateForm from './HandoffCreateForm.jsx'
+import SectionHeader from './SectionHeader.jsx'
 
-export default function HandoffList({ handoffs, client, canWrite, tasks = [], onMutate, agentFilter = 'all' }) {
+export default function HandoffList({ handoffs, client, canWrite, tasks = [], onMutate, agentFilter = 'all', index }) {
   const [createError, setCreateError] = useState(null)
   const [rowError, setRowError] = useState(null)
   const taskTitle = (id) => (id ? tasks.find((t) => t.id === id)?.title : null)
@@ -63,25 +64,20 @@ export default function HandoffList({ handoffs, client, canWrite, tasks = [], on
   const pendingCount = handoffs.filter((h) => h.status !== 'resolved').length
 
   return (
-    <div className="card-panel">
-      <div className="card-header">
-        <div className="card-title-group">
-          <span className="material-symbols-outlined" style={{ fontSize: 20, color: 'var(--secondary-container)' }}>
-            swap_horiz
-          </span>
-          <h3 className="card-title">Session Handoffs</h3>
-          {pendingCount > 0 && (
-            <span className="action-required-badge">
-              {pendingCount} Pending
-            </span>
-          )}
-        </div>
-        <span className="material-symbols-outlined muted" style={{ fontSize: 18 }}>
-          history_toggle_off
-        </span>
-      </div>
+    <section className="card-panel" aria-label="Handoffs">
+      <SectionHeader
+        index={index}
+        title="Handoffs"
+        meta={
+          pendingCount > 0 ? (
+            <span className="action-required-badge">{pendingCount} Pending</span>
+          ) : (
+            <span className="count-tag">none pending</span>
+          )
+        }
+      />
 
-      <div className="card-body" style={{ paddingBottom: 8 }}>
+      <div className="card-body">
         {onMutate && (
           <HandoffCreateForm
             client={client}
@@ -102,107 +98,75 @@ export default function HandoffList({ handoffs, client, canWrite, tasks = [], on
       </div>
 
       {filtered.length === 0 ? (
-        <div className="empty-placeholder" style={{ padding: '24px 16px' }}>
-          No session handoffs yet. Leave one when you wrap up an agent session.
-        </div>
+        <div className="empty-placeholder">No handoffs yet. Leave one when you wrap up an agent session.</div>
       ) : (
         <ul className="stream-list">
-          {filtered.map((h) => {
-            const isOpen = h.status === 'open'
-            return (
-              <li
-                key={h.id}
-                className={`stream-item${h.__optimistic ? ' optimistic' : ''}`}
-                style={{
-                  background: isOpen ? 'rgba(253, 106, 73, 0.04)' : undefined,
-                  borderLeft: isOpen ? '3px solid var(--secondary-container)' : undefined,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span className={`badge ${h.status}`}>{h.status}</span>
-                    {h.created_by && (
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--primary)', fontWeight: 600 }}>
-                        {h.created_by}
-                      </span>
-                    )}
-                  </div>
-                  <span className="small muted">
-                    {new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
+          {filtered.map((h) => (
+            <li
+              key={h.id}
+              className={`stream-item${h.__optimistic ? ' optimistic' : ''}${h.status === 'open' ? ' open-handoff' : ''}`}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div className="btn-row">
+                  <span className={`badge ${h.status}`}>{h.status}</span>
+                  {h.branch && <span className="agent-tag" style={{ color: 'var(--on-surface)' }}>⎇ {h.branch}</span>}
                 </div>
+                <span className="presence-time">
+                  {h.created_at
+                    ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : 'now'}
+                </span>
+              </div>
 
-                <p style={{ margin: '0 0 6px 0', fontSize: 14, fontWeight: 500, color: 'var(--on-surface)' }}>
-                  {h.summary}
+              {(h.created_by || h.recipient) && (
+                <div className="label" style={{ marginTop: 8 }}>
+                  {h.created_by || 'someone'}
+                  {h.recipient && <span className="accent-text"> → </span>}
+                  {h.recipient}
+                </div>
+              )}
+
+              <p style={{ margin: '6px 0 0', fontSize: 14, fontWeight: 500 }}>{h.summary}</p>
+
+              {h.next_action && (
+                <p className="handoff-next">
+                  <span className="label">Next</span>
+                  {h.next_action}
                 </p>
+              )}
 
-                {h.next_action && (
-                  <div style={{ background: 'var(--surface)', padding: '6px 10px', borderRadius: 4, border: 'var(--border-hairline)', fontSize: 12, margin: '6px 0' }}>
-                    <span style={{ color: 'var(--secondary)', fontWeight: 600 }}>Next action: </span>
-                    {h.next_action}
-                  </div>
-                )}
+              {h.blockers && <p className="handoff-blockers">Blocked: {h.blockers}</p>}
 
-                {h.blockers && (
-                  <div style={{ color: 'var(--error)', fontSize: 12, margin: '4px 0', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>warning</span>
-                    {h.blockers}
-                  </div>
-                )}
+              {taskTitle(h.task_id) && (
+                <div className="agent-tag" style={{ marginTop: 6 }}>↳ {taskTitle(h.task_id)}</div>
+              )}
 
-                <div className="task-bottom-meta" style={{ marginTop: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    {h.branch && (
-                      <span className="agent-tag">
-                        ⎇ {h.branch}
-                      </span>
-                    )}
-                    {taskTitle(h.task_id) && (
-                      <span className="agent-tag">
-                        ↳ {taskTitle(h.task_id)}
-                      </span>
-                    )}
-                  </div>
-
-                  {canWrite && client && !h.__optimistic && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {h.status === 'open' && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => pickUp(h)}
-                          style={{ padding: '3px 8px', fontSize: 11, borderColor: 'var(--secondary-container)', color: 'var(--secondary)' }}
-                        >
-                          Acknowledge
-                        </button>
-                      )}
-                      {h.status !== 'resolved' && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => resolve(h)}
-                          style={{ padding: '3px 8px', fontSize: 11, background: 'var(--primary-container)', color: 'var(--on-primary)' }}
-                        >
-                          Resolve
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="ghost danger"
-                        aria-label={`Delete handoff: ${h.summary}`}
-                        onClick={() => remove(h)}
-                        style={{ padding: '3px 6px', fontSize: 11 }}
-                      >
-                        ✕
-                      </button>
-                    </div>
+              {canWrite && client && !h.__optimistic && (
+                <div className="btn-row" style={{ marginTop: 10 }}>
+                  {h.status === 'open' && (
+                    <button type="button" className="primary small" onClick={() => pickUp(h)}>
+                      Pick up
+                    </button>
                   )}
+                  {h.status !== 'resolved' && (
+                    <button type="button" className="ghost small" onClick={() => resolve(h)}>
+                      Resolve
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="ghost danger icon"
+                    aria-label={`Delete handoff: ${h.summary}`}
+                    onClick={() => remove(h)}
+                  >
+                    ✕
+                  </button>
                 </div>
-              </li>
-            )
-          })}
+              )}
+            </li>
+          ))}
         </ul>
       )}
-    </div>
+    </section>
   )
 }

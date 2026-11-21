@@ -380,6 +380,8 @@ a {
 }
 
 .theme-toggle {
+  flex: none;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1404,9 +1406,397 @@ button.small-toggle:hover {
 .flex { display: flex; }
 .flex-col { flex-direction: column; }
 
+/* ------------------------------------- Content pages (CC, Guide) -- */
+
+.page-hero {
+  padding: 40px var(--gutter) 32px;
+  border-bottom: var(--border-strong);
+}
+
+.page-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 32px;
+  align-items: end;
+}
+
+.page-title {
+  margin: 0;
+  font-size: clamp(34px, 5.2vw, 68px);
+  font-weight: 800;
+  line-height: 0.98;
+  letter-spacing: -0.04em;
+  color: var(--on-surface);
+}
+
+.page-lede {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--on-surface-variant);
+  max-width: 52ch;
+}
+
+button.code-chip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.topology {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr);
+}
+
+.topology-col {
+  display: flex;
+  flex-direction: column;
+  padding: 20px var(--gutter);
+  min-width: 0;
+}
+
+.topology-col + .topology-hub,
+.topology-hub + .topology-col {
+  border-left: var(--border-hairline);
+}
+
+.topology-head {
+  padding-bottom: 10px;
+  border-bottom: var(--border-strong);
+}
+
+.topology-node {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: var(--border-hairline);
+  text-align: left;
+}
+
+.topology-name {
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.topology-note {
+  grid-column: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--on-surface-variant);
+}
+
+.topology-tag {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-text);
+}
+
+button.topology-link {
+  width: 100%;
+  background: none;
+  border: 0;
+  border-bottom: var(--border-hairline);
+  border-radius: 0;
+  padding: 12px 0;
+  color: var(--on-surface);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+button.topology-link:hover {
+  background: none;
+  border-color: var(--outline-variant);
+  color: var(--accent-text);
+}
+
+button.topology-link .material-symbols-outlined {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.topology-hub {
+  padding: 24px;
+  background: var(--primary);
+  color: var(--on-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+}
+
+.topology-hub-title {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+
+.topology-hub p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  opacity: 0.8;
+}
+
+.topology-hub-routes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.topology-hub-routes span {
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--on-primary) 35%, transparent);
+}
+
+.topology-hub-routes span:first-child {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.topology-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding: 12px var(--gutter);
+  border-top: var(--border-hairline);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--on-surface-variant);
+}
+
+.topology-foot span::before {
+  content: '■ ';
+  color: var(--accent);
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.feature {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px var(--gutter);
+  min-width: 0;
+}
+
+.feature + .feature {
+  border-left: var(--border-hairline);
+}
+
+.feature-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.feature-example {
+  margin-top: auto;
+  padding: 10px 12px;
+  border: var(--border-hairline);
+  border-left: 3px solid var(--accent);
+  font-size: 12px;
+}
+
+.walkthrough {
+  padding: 20px var(--gutter) 24px;
+  font-size: 12px;
+  line-height: 1.75;
+  overflow-x: auto;
+}
+
+.walk-step {
+  margin-top: 10px;
+  font-weight: 600;
+  color: var(--on-surface);
+}
+
+.walk-step:first-child {
+  margin-top: 0;
+}
+
+.walk-ok {
+  color: var(--green-text);
+}
+
+/* Field guide */
+.guide {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  flex: 1;
+}
+
+.guide-nav {
+  position: sticky;
+  top: var(--header-h);
+  align-self: start;
+  padding: 0 var(--gutter) 24px;
+  border-right: var(--border-strong);
+  min-height: calc(100vh - var(--header-h));
+}
+
+.guide-links {
+  display: flex;
+  flex-direction: column;
+  border-top: var(--border-strong);
+}
+
+button.guide-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 0;
+  background: none;
+  border: 0;
+  border-bottom: var(--border-hairline);
+  border-radius: 0;
+  color: var(--on-surface-variant);
+  font-size: 12px;
+  text-align: left;
+}
+
+button.guide-link:hover {
+  background: none;
+  border-color: var(--outline-variant);
+  color: var(--on-surface);
+}
+
+button.guide-link.active {
+  color: var(--on-surface);
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding-left: 12px;
+}
+
+button.guide-link .section-num::after {
+  content: '';
+  margin: 0 8px 0 0;
+}
+
+.guide-cta {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: var(--border-hairline);
+}
+
+.guide-body {
+  padding: 32px var(--gutter) 48px;
+  max-width: 920px;
+}
+
+.guide-title {
+  margin: 8px 0 14px;
+  font-size: clamp(28px, 3.6vw, 44px);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+
+.guide-lede {
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--on-surface-variant);
+  max-width: 68ch;
+}
+
+.guide-h3 {
+  margin: 28px 0 8px;
+  padding-top: 12px;
+  border-top: var(--border-strong);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.code-block {
+  margin: 8px 0 12px;
+  padding: 14px 16px;
+  background: var(--surface-container-low);
+  border: var(--border-hairline);
+  border-left: 3px solid var(--rule-strong);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--on-surface);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.guide-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: var(--border-strong);
+  margin-top: 16px;
+}
+
+.guide-card {
+  padding: 16px 16px 16px 0;
+  border-bottom: var(--border-hairline);
+}
+
+.guide-card:nth-child(2n) {
+  padding-left: 16px;
+  border-left: var(--border-hairline);
+}
+
+.guide-card h4 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.guide-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--on-surface-variant);
+}
+
+.tool-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--accent-text);
+}
+
 /* ---------------------------------------------------- Responsive -- */
 
 @media (max-width: 1100px) {
+  .topology,
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+  .topology-col + .topology-hub,
+  .topology-hub + .topology-col,
+  .feature + .feature {
+    border-left: 0;
+    border-top: var(--border-hairline);
+  }
   .board-grid {
     grid-template-columns: 1fr;
   }
@@ -1425,6 +1815,16 @@ button.small-toggle:hover {
 }
 
 @media (max-width: 900px) {
+  .page-hero-grid,
+  .guide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .guide-nav {
+    position: static;
+    min-height: 0;
+    border-right: 0;
+    border-bottom: var(--border-strong);
+  }
   .top-header-inner {
     flex-wrap: wrap;
     padding-top: 8px;
@@ -1473,8 +1873,13 @@ button.small-toggle:hover {
     grid-column: 2;
     justify-content: flex-start;
   }
-  .search-results-grid {
+  .search-results-grid,
+  .guide-cards {
     grid-template-columns: 1fr;
+  }
+  .guide-card:nth-child(2n) {
+    padding-left: 0;
+    border-left: 0;
   }
   .search-input-group {
     max-width: none;
@@ -1503,6 +1908,16 @@ button.small-toggle:hover {
     flex: 1;
     max-width: none;
     width: 100%;
+    min-width: 0;
+  }
+  .switcher-row {
+    gap: 4px;
+  }
+  .switcher-row button {
+    padding: 5px 8px;
+  }
+  .header-actions {
+    gap: 8px;
   }
   .stat-foot:empty {
     display: none;

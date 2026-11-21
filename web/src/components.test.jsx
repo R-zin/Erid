@@ -141,14 +141,36 @@ describe('Swiss Editorial UI Components', () => {
   })
 
   describe('ContinuousContext page', () => {
-    it('renders hero and vector topology schematic', async () => {
+    it('renders the hero, the hub diagram and the feature sections', async () => {
       const { default: ContinuousContext } = await import('./pages/ContinuousContext.jsx')
       const html = renderToString(<ContinuousContext onNavigateWorkspace={() => {}} />)
       expect(html).toContain('AI agents shouldn’t wake up with amnesia')
-      expect(html).toContain('Sub-graph Topology')
+      expect(html).toContain('How it fits together')
       expect(html).toContain('Durable Handoffs')
       expect(html).toContain('Claude Code')
-      expect(html).toContain('Cursor IDE')
+      expect(html).toContain('Cursor')
+      expect(html).toContain('docker compose up -d postgres api web')
+    })
+
+    it('makes no claims the product cannot back', async () => {
+      const { default: ContinuousContext } = await import('./pages/ContinuousContext.jsx')
+      const { default: CleanFieldGuide } = await import('./pages/CleanFieldGuide.jsx')
+      const html =
+        renderToString(<ContinuousContext onNavigateWorkspace={() => {}} />) +
+        renderToString(<CleanFieldGuide onNavigateWorkspace={() => {}} />)
+      for (const claim of ['Raft', 'pgvector', '4,812', '99.8%', 'Mutex', 'Dedupe', 'vector', 'src.bridge', 'claude plugin add']) {
+        expect(html).not.toContain(claim)
+      }
+    })
+  })
+
+  describe('CleanFieldGuide page', () => {
+    it('lists every MCP tool group and starts on the quickstart', async () => {
+      const { default: CleanFieldGuide } = await import('./pages/CleanFieldGuide.jsx')
+      const html = renderToString(<CleanFieldGuide onNavigateWorkspace={() => {}} />)
+      expect(html).toContain('Quickstart')
+      expect(html).toContain('docker compose up -d postgres api web')
+      expect(html).toContain('MCP tools &amp; prompts')
     })
   })
 

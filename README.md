@@ -135,6 +135,26 @@ rebuilds the `api`/`web` images, restarts the stack, and polls
 ./infra/deploy.sh
 ```
 
+### Public deployment (production overlay)
+
+For a server other people can reach, layer `docker-compose.prod.yml` on top.
+It puts Caddy in front with automatic HTTPS for `ERID_DOMAIN`, unpublishes
+`api`/`web` (only `:80`/`:443` are exposed), keeps Postgres data in a named
+volume, and defaults to closed mode. It also **refuses to start** without
+`ERID_DOMAIN`, `POSTGRES_PASSWORD` and `ERID_ADMIN_TOKEN`:
+
+```bash
+cp .env.example .env    # set ERID_ENV=prod, ERID_DOMAIN, POSTGRES_PASSWORD,
+                        # ERID_ADMIN_TOKEN, ERID_SESSION_SECRET, JWT keypair
+./infra/deploy.sh       # uses the prod overlay when ERID_ENV=prod
+
+# Provision a workspace for a team (operator only):
+curl -XPOST "https://$ERID_DOMAIN/api/workspaces?slug=acme" -H "X-Admin-Token: $ERID_ADMIN_TOKEN"
+```
+
+MCP clients then point at `https://$ERID_DOMAIN/mcp`. See
+[`docs/softlaunch.md`](docs/softlaunch.md) for the full launch checklist.
+
 ### CI verification
 
 The `compose-verify` job in `.github/workflows/tests.yml` builds the full

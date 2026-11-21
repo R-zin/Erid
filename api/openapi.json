@@ -1362,7 +1362,7 @@
     },
     "/api/workspaces": {
       "get": {
-        "description": "List every workspace (slug, name, secured flag).\n\nDeliberately unauthenticated: principals are per-workspace, a directory is\nneeded to discover workspaces, and only non-secret metadata is exposed.",
+        "description": "List every workspace (slug, name, secured flag).\n\nUnauthenticated by default: principals are per-workspace, a directory is\nneeded to discover workspaces, and only non-secret metadata is exposed. With\n``ERID_PUBLIC_WORKSPACE_DIRECTORY=0`` it needs the operator's admin token.",
         "operationId": "list_workspaces_api_workspaces_get",
         "responses": {
           "200": {
@@ -1380,13 +1380,18 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "summary": "List Workspaces",
         "tags": [
           "context"
         ]
       },
       "post": {
-        "description": "Create a workspace and return its API key (shown only here; never re-disclosed).",
+        "description": "Create a workspace and return its API key (shown only here; never re-disclosed).\n\nRequires ``X-Admin-Token`` when ``ERID_ADMIN_TOKEN`` is configured.",
         "operationId": "provision_workspace_api_workspaces_post",
         "parameters": [
           {
@@ -1422,6 +1427,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
         "summary": "Provision Workspace",
         "tags": [
           "context"

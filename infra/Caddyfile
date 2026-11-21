@@ -1,0 +1,27 @@
+# TLS-terminating reverse proxy for the production overlay (docker-compose.prod.yml).
+# Caddy obtains and renews a Let's Encrypt certificate for $ERID_DOMAIN; point
+# the domain's DNS A/AAAA record at this host and open ports 80 and 443.
+
+{$ERID_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# REST, WebSocket (/api/.../ws), MCP over HTTP, health and API docs.
+	@api path /api/* /mcp /mcp/* /health /docs /docs/* /openapi.json
+	handle @api {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else is the dashboard SPA.
+	handle {
+		reverse_proxy web:80
+	}
+}

@@ -36,8 +36,22 @@ async def _prune_outbox_forever() -> None:
         await asyncio.sleep(PRUNE_INTERVAL_SECS)
 
 
+def _warn_insecure_config() -> None:
+    """Log loudly when the running config is only safe for local development."""
+    if settings.allow_open_workspaces:
+        logger.warning(
+            "ERID_ALLOW_OPEN_WORKSPACES is on: unknown slugs are created on first touch with full anonymous "
+            "access. Set ERID_ALLOW_OPEN_WORKSPACES=0 on any deployment strangers can reach."
+        )
+    if not settings.admin_token:
+        logger.warning("ERID_ADMIN_TOKEN is unset: anyone who can reach the API can provision workspaces.")
+    if not (settings.jwt_private_key and settings.jwt_public_key):
+        logger.warning("ERID_JWT_PRIVATE_KEY/PUBLIC_KEY unset: using an ephemeral keypair; tokens die on restart.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _warn_insecure_config()
     # Bring the schema up to date. Runs Alembic "upgrade head" for real
     # databases; tests/SQLite create tables directly from the models instead.
     await init_db()

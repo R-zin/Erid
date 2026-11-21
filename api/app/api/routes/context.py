@@ -9,10 +9,17 @@ import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import Principal, require_action, resolve_ws_principal
+from app.core.security import (
+    Principal,
+    is_operator,
+    operator_token,
+    require_action,
+    require_operator_if_configured,
+    resolve_ws_principal,
+)
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.models import HandoffStatus, Permission, TaskStatus
@@ -64,21 +71,34 @@ OWNER = require_action(Permission.owner)
 # ---------------------------------------------------------------------------
 
 
-@router.post("/workspaces", response_model=WorkspaceCreated, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/workspaces",
+    response_model=WorkspaceCreated,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_operator_if_configured)],
+)
 async def provision_workspace(
     slug: str = Query(..., min_length=1), db: AsyncSession = Depends(get_db)
 ) -> WorkspaceCreated:
-    """Create a workspace and return its API key (shown only here; never re-disclosed)."""
+    """Create a workspace and return its API key (shown only here; never re-disclosed).
+
+    Requires ``X-Admin-Token`` when ``ERID_ADMIN_TOKEN`` is configured.
+    """
     return await ws_svc.provision_workspace(db, slug)
 
 
 @router.get("/workspaces", response_model=list[WorkspaceListItem])
-async def list_workspaces(db: AsyncSession = Depends(get_db)) -> list[WorkspaceListItem]:
+async def list_workspaces(
+    token: str | None = Depends(operator_token), db: AsyncSession = Depends(get_db)
+) -> list[WorkspaceListItem]:
     """List every workspace (slug, name, secured flag).
 
-    Deliberately unauthenticated: principals are per-workspace, a directory is
-    needed to discover workspaces, and only non-secret metadata is exposed.
+    Unauthenticated by default: principals are per-workspace, a directory is
+    needed to discover workspaces, and only non-secret metadata is exposed. With
+    ``ERID_PUBLIC_WORKSPACE_DIRECTORY=0`` it needs the operator's admin token.
     """
+    if not settings.public_workspace_directory and not is_operator(token):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Workspace directory is not public")
     return await ws_svc.list_workspaces(db)
 
 

@@ -67,6 +67,29 @@ class Principal:
         return Permission.owner in self.permissions or permission in self.permissions
 
 
+_admin_token_header = APIKeyHeader(name="X-Admin-Token", auto_error=False)
+
+
+def is_operator(token: str | None) -> bool:
+    """True when ``token`` matches the configured ``ERID_ADMIN_TOKEN``."""
+    expected = settings.admin_token
+    return bool(expected) and bool(token) and secrets.compare_digest(token.encode(), expected.encode())
+
+
+async def require_operator_if_configured(token: str | None = Security(_admin_token_header)) -> None:
+    """Gate an operator-only route behind ``X-Admin-Token`` when one is configured.
+
+    With no ``ERID_ADMIN_TOKEN`` set the route stays open (zero-config local dev).
+    """
+    if settings.admin_token and not is_operator(token):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin token required")
+
+
+async def operator_token(token: str | None = Security(_admin_token_header)) -> str | None:
+    """Expose the raw ``X-Admin-Token`` header to a route that checks it itself."""
+    return token
+
+
 def _permissions_for(role: ActorRole, grants: frozenset[Permission]) -> frozenset[Permission]:
     """Resolve effective permissions: role defaults + explicit grants.
 

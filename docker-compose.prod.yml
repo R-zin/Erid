@@ -1,0 +1,63 @@
+# Production overlay for a public (soft-launch) deployment.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# (infra/deploy.sh does this when ERID_ENV=prod.) What it changes over the dev stack:
+#   * Caddy in front on :80/:443 with automatic HTTPS for $ERID_DOMAIN. It routes
+#     /api, /mcp, /health, /docs to the API and everything else to the dashboard.
+#   * api and web are no longer published on host ports; only Caddy is.
+#   * Closed mode by default (no anonymous workspaces) and secrets are REQUIRED:
+#     compose refuses to start if POSTGRES_PASSWORD, ERID_ADMIN_TOKEN or
+#     ERID_DOMAIN are missing.
+#   * Postgres data lives in a named volume so `docker compose down` keeps it.
+#     Note: POSTGRES_PASSWORD only takes effect when the volume is first created.
+
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    ports: !reset []
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
+              "--proxy-headers", "--forwarded-allow-ips", "*"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/erid
+      CORS_ORIGINS: https://${ERID_DOMAIN:?set ERID_DOMAIN in .env}
+      ERID_ALLOW_OPEN_WORKSPACES: ${ERID_ALLOW_OPEN_WORKSPACES:-0}
+      ERID_ADMIN_TOKEN: ${ERID_ADMIN_TOKEN:?set ERID_ADMIN_TOKEN in .env}
+      ERID_PUBLIC_WORKSPACE_DIRECTORY: ${ERID_PUBLIC_WORKSPACE_DIRECTORY:-0}
+      ERID_OAUTH_REDIRECT_BASE: https://${ERID_DOMAIN}
+      ERID_OAUTH_WEB_BASE: https://${ERID_DOMAIN}
+    restart: unless-stopped
+
+  web:
+    ports: !reset []
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      ERID_DOMAIN: ${ERID_DOMAIN:?set ERID_DOMAIN in .env}
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

@@ -68,6 +68,17 @@ class Settings:
     # whoever asks first — provision with POST /api/workspaces instead, which
     # mints a key up front.
     allow_open_workspaces: bool = field(default_factory=lambda: _env_flag("ERID_ALLOW_OPEN_WORKSPACES", True))
+    # Operator secret gating workspace provisioning. When set, POST
+    # /api/workspaces requires a matching ``X-Admin-Token`` header, so only the
+    # operator can mint new workspaces (and their owner keys). Empty keeps the
+    # endpoint open, which is fine locally but lets anyone who can reach a public
+    # deployment create workspaces. Generate with: `openssl rand -hex 32`
+    admin_token: str = field(default_factory=lambda: os.getenv("ERID_ADMIN_TOKEN", ""))
+    # Whether GET /api/workspaces lists every workspace slug to anonymous
+    # callers. ON by default (the dashboard's workspace picker uses it). Turn it
+    # off on a shared deployment so one team can't enumerate another's slugs;
+    # the listing then needs the admin token.
+    public_workspace_directory: bool = field(default_factory=lambda: _env_flag("ERID_PUBLIC_WORKSPACE_DIRECTORY", True))
     # Skip Alembic migrations on startup (create tables directly instead). Used
     # by tests and local SQLite; production should leave this unset.
     skip_migrations: bool = field(default_factory=lambda: os.getenv("ERID_SKIP_MIGRATIONS", "") == "1")

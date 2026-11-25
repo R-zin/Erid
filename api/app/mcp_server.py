@@ -435,7 +435,15 @@ class MCPEndpoint:
     """
 
     def __init__(self) -> None:
-        self._manager: StreamableHTTPSessionManager | None = None
+        # One manager per running lifespan, newest last. Lifespans can overlap
+        # (a server still shutting down while the next one starts, as in the
+        # live-server tests), so each removes only its own manager; clearing a
+        # single shared slot let a late shutdown wipe out the newer server's
+        # manager and turn /mcp into a 503.
+        self._managers: list[StreamableHTTPSessionManager] = []
+
+    def _active_manager(self) -> StreamableHTTPSessionManager | None:
+        return self._managers[-1] if self._managers else None
 
     @contextlib.asynccontextmanager
     async def lifespan(self) -> AsyncIterator[None]:
@@ -448,19 +456,20 @@ class MCPEndpoint:
             security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         )
         async with manager.run():
-            self._manager = manager
+            self._managers.append(manager)
             try:
                 yield
             finally:
-                self._manager = None
+                self._managers.remove(manager)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if self._manager is None:
+        manager = self._active_manager()
+        if manager is None:
             from starlette.responses import JSONResponse
 
             await JSONResponse({"detail": "MCP endpoint is not running"}, status_code=503)(scope, receive, send)
             return
-        await self._manager.handle_request(scope, receive, send)
+        await manager.handle_request(scope, receive, send)
 
 
 endpoint = MCPEndpoint()

@@ -45,9 +45,13 @@ real-time feed, so:
   of play for whoever picks up next.
 - **No duplicate work** — `search_context` / `recent_decisions` surface what's
   already been decided before re-deciding it.
-- **Coordination** — `update_presence` broadcasts "I'm editing `auth.py`" so
-  humans and agents don't collide.
+- **Coordination** — `update_presence` broadcasts "I'm editing `auth.py`", and
+  `claim_files` takes an advisory lease on paths so two agents don't edit the
+  same files: a conflicting claim comes back with who holds it and why.
 - **Visibility** — the dashboard shows all of it live over a WebSocket.
+- **Safe to share** — credentials pasted into tasks, decisions or handoffs are
+  redacted before anyone (or any agent) sees them, and security-relevant
+  actions land in an audit trail.
 
 ## Components
 
@@ -140,8 +144,11 @@ rebuilds the `api`/`web` images, restarts the stack, and polls
 For a server other people can reach, layer `docker-compose.prod.yml` on top.
 It puts Caddy in front with automatic HTTPS for `ERID_DOMAIN`, unpublishes
 `api`/`web` (only `:80`/`:443` are exposed), keeps Postgres data in a named
-volume, and defaults to closed mode. It also **refuses to start** without
-`ERID_DOMAIN`, `POSTGRES_PASSWORD` and `ERID_ADMIN_TOKEN`:
+volume, runs `ERID_API_REPLICAS` (default 2) API replicas behind Caddy, and
+defaults to closed mode. It **refuses to start** without `ERID_DOMAIN`,
+`POSTGRES_PASSWORD`, `ERID_ADMIN_TOKEN` and a JWT keypair, and the API itself
+runs in production mode (`ERID_ENV=production`), which refuses any other
+unsafe setting:
 
 ```bash
 cp .env.example .env    # set ERID_ENV=prod, ERID_DOMAIN, POSTGRES_PASSWORD,
@@ -154,6 +161,16 @@ curl -XPOST "https://$ERID_DOMAIN/api/workspaces?slug=acme" -H "X-Admin-Token: $
 
 MCP clients then point at `https://$ERID_DOMAIN/mcp`. See
 [`docs/softlaunch.md`](docs/softlaunch.md) for the full launch checklist.
+
+### Kubernetes (autoscaling) and production guide
+
+[`deploy/k8s/`](deploy/k8s/README.md) deploys the API and dashboard with
+HorizontalPodAutoscalers, PodDisruptionBudgets, readiness/liveness probes,
+NetworkPolicies and the restricted Pod Security Standard
+(`kubectl apply -k deploy/k8s/base`). [`docs/production.md`](docs/production.md)
+covers how Erid scales (stateless replicas, LISTEN/NOTIFY fan-out, migration
+lock, load shedding, graceful shutdown), its security controls, every
+production setting, and load-test results.
 
 ### CI verification
 
@@ -417,9 +434,11 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 
 | Method | Path                          | Auth | Purpose                          |
 | ------ | ----------------------------- | ---- | -------------------------------- |
-| GET    | `/health`                     | —    | liveness                         |
+| GET    | `/health`                     | —    | liveness (no dependencies)       |
+| GET    | `/ready` (no `/api` prefix)   | —    | readiness: database + event bus  |
+| GET    | `/metrics` (no `/api` prefix) | token‡ | Prometheus metrics             |
 | GET    | `/workspaces`                 | —    | directory (slug/name/secured; never keys) |
-| POST   | `/workspaces?slug=`           | —    | provision + mint API key         |
+| POST   | `/workspaces?slug=`           | operator§ | provision + mint API key    |
 | POST   | `/workspaces/{slug}/secure`   | —†   | claim an open workspace (key shown once) |
 | POST   | `/workspaces/{slug}/rotate-key`| owner | rotate the workspace key        |
 | DELETE | `/workspaces/{slug}`          | owner| delete the workspace (cascades)  |
@@ -439,6 +458,12 @@ Base path `/api`, workspace-scoped under `/workspaces/{slug}`:
 | POST   | `/workspaces/{slug}/handoffs/{id}/resolve`| key* | mark done (→ resolved)       |
 | DELETE | `/workspaces/{slug}/handoffs/{id}`| key* | delete a handoff             |
 | GET    | `/workspaces/{slug}/tasks/{id}/handoffs`| key* | handoffs linked to a task |
+| GET    | `/workspaces/{slug}/claims`   | key* | active file claims (`?path=` to filter) |
+| POST   | `/workspaces/{slug}/claims`   | key* | claim paths/globs (TTL, exclusive/shared); returns granted + conflicts |
+| POST   | `/workspaces/{slug}/claims/check`| key* | who claims these paths (for pre-commit hooks) |
+| POST   | `/workspaces/{slug}/claims/release`| key* | release your claims          |
+| DELETE | `/workspaces/{slug}/claims/{id}`| key* | release one claim (yours, or any as admin) |
+| GET    | `/workspaces/{slug}/audit`    | admin| audit trail (`?action=`, `?limit=`, `?offset=`) |
 | GET    | `/workspaces/{slug}/presence` | key* | active collaborators             |
 | POST   | `/workspaces/{slug}/presence` | key* | presence heartbeat (upsert)      |
 | POST   | `/workspaces/{slug}/actors`   | admin| mint per-actor key (shown once)  |
@@ -455,6 +480,10 @@ unless `ERID_ALLOW_OPEN_WORKSPACES=0`, which makes an unknown slug 404 and a
 keyless workspace inaccessible rather than open.
 † unauthenticated by design (an open workspace has no admin to gate on), and
 disabled entirely when `ERID_ALLOW_OPEN_WORKSPACES=0`.
+‡ open unless `ERID_METRICS_TOKEN` is set (then `Authorization: Bearer <token>`).
+§ open unless `ERID_ADMIN_TOKEN` is set (then `X-Admin-Token: <token>`).
+Auth-sensitive routes are rate-limited per client IP across replicas, and all
+routes per credential; see [`docs/production.md`](docs/production.md).
 `admin` requires the `admin_keys` permission (owner or a granted admin). Each
 route enforces a specific permission (`read`/`write_tasks`/`write_decisions`/
 `presence`); a key/token must carry it.
@@ -497,7 +526,13 @@ ERID_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/eri
 ```
 
 By default `tests/` runs the app against an isolated in-memory SQLite DB (no
-Postgres needed); CI runs it on both. `tests/test_contract.py` fails if
+Postgres needed); CI runs it on both. Beyond unit and integration tests the
+suite fuzzes every REST operation and MCP tool with hostile input (no 5xx
+allowed), checks properties with Hypothesis, verifies the migrations against
+the models, and on Postgres boots three real API processes to test
+cross-replica fan-out, shared rate limits, claim races and recovery from lost
+LISTEN connections. `scripts/loadtest.py` load-tests one or more instances;
+results are in [`docs/production.md`](docs/production.md#testing). `tests/test_contract.py` fails if
 `api/openapi.json` is stale or if `mcp-server/src/client.py` / `web/src/api.js`
 call a route the API doesn't serve. `mcp-server/tests/`
 boots a real API subprocess and drives the MCP client end-to-end; set
@@ -514,6 +549,15 @@ Environment variables (see `api/app/core/settings.py`, `mcp-server/src/client.py
 | `ERID_EVENT_RETENTION_HOURS` | `72` — how long `/ws?since=` can replay | api |
 | `CORS_ORIGINS`      | `http://localhost:5173,http://localhost:8000`      | api       |
 | `ERID_ALLOW_OPEN_WORKSPACES` | `1` — set `0` on public deployments (see [Authentication](#closing-off-open-workspaces-public-deployments)) | api |
+| `ERID_ENV`          | `development` — `production` refuses unsafe settings | api |
+| `ERID_RATE_LIMIT_AUTH` / `_AUTH_FAILURES` / `_API` | `30/minute` / `20/minute` / `1200/minute` | api |
+| `ERID_SECRET_SCANNING` | `redact` (`reject`, `off`)                      | api       |
+| `ERID_MAX_INFLIGHT_REQUESTS` / `ERID_MAX_WEBSOCKETS` | `256` / `2000` per replica | api |
+| `ERID_DB_POOL_SIZE` / `ERID_DB_MAX_OVERFLOW` | `10` / `10` per replica   | api       |
+
+Every production setting (PgBouncer, metrics token, body limit, docs,
+migrations, audit retention) is listed in [`docs/production.md`](docs/production.md)
+and `.env.example`.
 | `API_BASE`          | `http://localhost:8000`                            | mcp-server|
 | `WORKSPACE_SLUG`    | —                                                  | mcp-server|
 | `WORKSPACE_API_KEY` | —                                                  | mcp-server|
@@ -551,6 +595,14 @@ Done (this iteration):
 - [x] **Session handoffs** — durable `handoffs` resource (summary, files changed, commands run, blockers, next action, branch/task/recipient links) with an `open → acknowledged → resolved` lifecycle, REST CRUD + lifecycle endpoints, `write_handoffs` permission, `handoff_created/updated/deleted` WS events, MCP tools (`create_handoff`, `recent_handoffs`, `acknowledge_handoff`, `resolve_handoff`), a `workspace://{slug}/handoffs` resource, a `catch_up` prompt that briefs on open handoffs, dashboard list/create/pick-up/resolve UI, and `open_handoff_count` in the workspace summary.
 
 - [x] **Architecture consolidation** — service layer shared by REST and MCP; MCP served in-process at `/mcp`; transactional event outbox with `seq` and `/ws?since=` replay; Redis replaced by Postgres `LISTEN/NOTIFY`; hashed workspace keys; actor-bound attribution; test suite runs on Postgres in CI; OpenAPI contract checks for the hand-written clients.
+
+- [x] **Production readiness** — horizontal scaling (advisory-locked
+  migrations, readiness/metrics, load shedding, graceful drain, PgBouncer
+  support), Kubernetes HPA manifests and Compose replicas, rate limits and
+  brute-force lockout shared across replicas, audit trail, production config
+  gate, security headers, Origin checks, log redaction, file claims, secret
+  scanning, and fuzz/property/multi-process/load testing that found and fixed
+  nine bugs. See [`docs/production.md`](docs/production.md).
 
 All roadmap items complete.
 

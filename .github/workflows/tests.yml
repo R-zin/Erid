@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Check code formatting
-        run: uv run ruff format --check api mcp-server tests
+        run: uv run ruff format --check api mcp-server tests scripts
 
   ruff-check:
     name: ruff-check
@@ -46,7 +46,7 @@ jobs:
           enable-cache: true
 
       - name: Lint Python codebase
-        run: uv run ruff check api mcp-server tests
+        run: uv run ruff check api mcp-server tests scripts
 
   pytest:
     name: pytest
@@ -198,6 +198,19 @@ jobs:
         env:
           ERID_LIVE_API: http://127.0.0.1:8000
         run: uv run pytest tests/test_tools.py -v
+
+      - name: Load smoke (concurrent agents + realtime delivery)
+        run: |
+          set -euo pipefail
+          uv run python scripts/loadtest.py --urls http://127.0.0.1:8000 \
+            --workspaces 3 --agents-per-workspace 4 --duration 15 --json | tee /tmp/load.json
+          uv run python - <<'PY'
+          import json
+          d = json.load(open("/tmp/load.json"))
+          print(json.dumps(d, indent=2))
+          assert d["success_rate"] == 1.0, f"requests failed under load: {d['status_codes']}"
+          assert d["realtime"]["delivery_rate"] == 1.0, f"realtime events lost: {d['realtime']}"
+          PY
 
       - name: Dump API logs on failure
         if: failure()
@@ -401,6 +414,168 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  security-audit:
+    name: security-audit (dependencies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv + Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Audit Python dependencies (locked versions)
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt > /tmp/requirements.txt
+          uvx pip-audit --strict --disable-pip -r /tmp/requirements.txt
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Audit dashboard runtime dependencies
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+
+  k8s-manifests:
+    name: k8s-manifests (kubeconform)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+
+      - name: Render and validate the base
+        run: |
+          kubectl kustomize deploy/k8s/base > /tmp/rendered.yaml
+          kubeconform -strict -summary -kubernetes-version 1.30.0 /tmp/rendered.yaml
+
+      - name: Validate optional manifests
+        run: |
+          kubeconform -strict -summary -kubernetes-version 1.30.0 -ignore-missing-schemas \
+            deploy/k8s/optional/*.yaml
+
+  compose-prod-verify:
+    name: compose-prod-verify (replicas behind Caddy, production mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ERID_ENV: prod
+      ERID_DOMAIN: localhost
+      ERID_API_REPLICAS: "3"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate production secrets
+        run: |
+          openssl genpkey -algorithm ed25519 -out /tmp/jwt.pem
+          openssl pkey -in /tmp/jwt.pem -pubout -out /tmp/jwt.pub
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "ERID_ADMIN_TOKEN=$(openssl rand -hex 32)"
+            echo "ERID_SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "ERID_JWT_PRIVATE_KEY<<EOF"; cat /tmp/jwt.pem; echo "EOF"
+            echo "ERID_JWT_PUBLIC_KEY<<EOF"; cat /tmp/jwt.pub; echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Start the production stack
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build postgres api web caddy
+
+      - name: Wait for every API replica to be ready
+        run: |
+          set -e
+          for i in $(seq 1 90); do
+            ready=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml ps api --format '{{.Health}}' | grep -c healthy || true)
+            [ "$ready" = "3" ] && break
+            sleep 2
+          done
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+          [ "$ready" = "3" ] || { echo "expected 3 healthy API replicas, got $ready"; exit 1; }
+          for i in $(seq 1 30); do curl -skf https://localhost/health && break; sleep 2; done
+
+      - name: Verify the stack through Caddy
+        run: |
+          set -euo pipefail
+          # Security headers and TLS.
+          curl -skI https://localhost/api/workspaces/x/tasks | tee /tmp/h.txt
+          grep -qi '^strict-transport-security' /tmp/h.txt
+          grep -qi "^content-security-policy: default-src 'none'" /tmp/h.txt
+          # Production mode: anonymous provisioning is refused, the operator's works.
+          test "$(curl -sk -o /dev/null -w '%{http_code}' -XPOST 'https://localhost/api/workspaces?slug=ci')" = 401
+          KEY=$(curl -skf -XPOST 'https://localhost/api/workspaces?slug=ci' -H "X-Admin-Token: $ERID_ADMIN_TOKEN" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["api_key"])')
+          # Writes and reads spread over the replicas by Caddy.
+          for i in $(seq 1 30); do
+            curl -skf -XPOST https://localhost/api/workspaces/ci/tasks -H "X-API-Key: $KEY" \
+              -H 'content-type: application/json' -d "{\"title\": \"t$i\"}" > /dev/null
+          done
+          COUNT=$(curl -skf "https://localhost/api/workspaces/ci/tasks" -H "X-API-Key: $KEY" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')
+          test "$COUNT" = 30
+          # Interactive docs are off in production.
+          test "$(curl -sk -o /dev/null -w '%{http_code}' https://localhost/docs)" != 200 || \
+            ! curl -sk https://localhost/docs | grep -qi swagger
+
+      - name: Realtime events cross replicas behind Caddy
+        run: |
+          set -euo pipefail
+          pip install --quiet "websockets>=13" httpx
+          KEY=$(curl -skf -XPOST 'https://localhost/api/workspaces?slug=ci-ws' -H "X-Admin-Token: $ERID_ADMIN_TOKEN" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["api_key"])')
+          KEY=$KEY python3 - <<'PY'
+          import asyncio, json, os, ssl
+          import httpx, websockets
+          key = os.environ["KEY"]
+          ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+          async def main():
+              url = f"wss://localhost/api/workspaces/ci-ws/ws?api_key={key}"
+              async with websockets.connect(url, ssl=ctx) as ws:
+                  async with httpx.AsyncClient(verify=False) as http:
+                      for i in range(12):  # least_conn spreads these over all replicas
+                          r = await http.post("https://localhost/api/workspaces/ci-ws/tasks",
+                                              json={"title": f"rt{i}"}, headers={"X-API-Key": key})
+                          r.raise_for_status()
+                  seen = set()
+                  while len(seen) < 12:
+                      msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+                      if msg.get("type") == "task_created":
+                          seen.add(msg["data"]["title"])
+              print("received all", len(seen), "events")
+          asyncio.run(main())
+          PY
+
+      - name: Scale the API down and up
+        run: |
+          set -e
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-recreate --scale api=1 api
+          for i in $(seq 1 20); do curl -skf https://localhost/health > /dev/null && break; sleep 1; done
+          curl -skf https://localhost/health
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-recreate --scale api=4 api
+          for i in $(seq 1 60); do
+            ready=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml ps api --format '{{.Health}}' | grep -c healthy || true)
+            [ "$ready" = "4" ] && break; sleep 2
+          done
+          [ "$ready" = "4" ]
+          for i in $(seq 1 20); do curl -skf https://localhost/health > /dev/null; done
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml down -v
+
   ci-gate:
     name: ci-gate
     runs-on: ubuntu-latest
@@ -414,6 +589,9 @@ jobs:
       - vscode
       - jetbrains
       - compose-verify
+      - security-audit
+      - k8s-manifests
+      - compose-prod-verify
     if: always()
     steps:
       - name: Check all required jobs passed

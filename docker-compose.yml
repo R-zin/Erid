@@ -41,6 +41,14 @@ services:
       ERID_OAUTH_GITHUB_CLIENT_SECRET: ${ERID_OAUTH_GITHUB_CLIENT_SECRET:-}
       ERID_OAUTH_REDIRECT_BASE: ${ERID_OAUTH_REDIRECT_BASE:-http://localhost:8000}
       ERID_OAUTH_WEB_BASE: ${ERID_OAUTH_WEB_BASE:-http://localhost:8080}
+      # Hardening and capacity (see docs/production.md); defaults match the app's.
+      ERID_RATE_LIMIT_AUTH: ${ERID_RATE_LIMIT_AUTH:-30/minute}
+      ERID_RATE_LIMIT_AUTH_FAILURES: ${ERID_RATE_LIMIT_AUTH_FAILURES:-20/minute}
+      ERID_RATE_LIMIT_API: ${ERID_RATE_LIMIT_API:-1200/minute}
+      ERID_MAX_INFLIGHT_REQUESTS: ${ERID_MAX_INFLIGHT_REQUESTS:-256}
+      ERID_MAX_WEBSOCKETS: ${ERID_MAX_WEBSOCKETS:-2000}
+      ERID_MAX_BODY_BYTES: ${ERID_MAX_BODY_BYTES:-1048576}
+      ERID_SECRET_SCANNING: ${ERID_SECRET_SCANNING:-redact}
     # No curl in the python:3.14-slim image; probe /health with baked-in Python
     # instead. Single-quoted YAML string keeps the embedded double quotes intact.
     healthcheck:

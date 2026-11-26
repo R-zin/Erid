@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased: production readiness
+
+Full details: [`docs/production.md`](docs/production.md).
+
+### Scaling and autoscaling
+- Stateless API replicas: Alembic serialized by an advisory lock (concurrent
+  boots crashed 4 of 6 before), `ERID_RUN_MIGRATIONS` + `python -m app.migrate`,
+  configurable connection pool, PgBouncer support (`ERID_DB_PGBOUNCER`,
+  `ERID_DIRECT_DATABASE_URL`).
+- `/ready` (database + LISTEN connection) beside `/health`; Prometheus `/metrics`.
+- Load shedding (`ERID_MAX_INFLIGHT_REQUESTS`, `ERID_MAX_WEBSOCKETS`); graceful
+  shutdown closes WebSockets with 1012.
+- Production mode never silently falls back to an in-process event bus.
+- Kubernetes manifests with HPA, PDB, probes, NetworkPolicies and restricted Pod
+  Security; Compose prod overlay runs N replicas behind Caddy; image release
+  workflow to GHCR.
+
+### Security
+- Rate limits shared across replicas for auth-sensitive routes, per credential
+  elsewhere; brute-force lockout; audit trail (`GET /workspaces/{slug}/audit`).
+- `ERID_ENV=production` refuses unsafe configuration; docs off in production.
+- Security headers, Origin checks on `/mcp` and WebSockets, request body limit,
+  credential redaction in access logs, non-root containers.
+- Workspace-key JWTs are bound to the key and workspace (rotation now revokes them).
+
+### Features
+- File claims: advisory, TTL'd, exclusive/shared leases on paths and globs, with
+  conflict reporting (REST + MCP `claim_files`, `release_files`, `list_claims`,
+  `check_files`).
+- Secret scanning on writes (`ERID_SECRET_SCANNING=redact|reject|off`).
+- `GET /tasks` is paginated.
+
+### Fixed
+- 500s on over-long fields, NUL characters, lone surrogates and huge offsets;
+  MCP errors leaking database internals.
+
+### Testing
+- API and MCP fuzzing, Hypothesis properties, migration/model drift and
+  round-trip, multi-process cluster tests, deployment manifest checks, load test
+  script; CI adds a load smoke, dependency audits, kubeconform and a production
+  Compose run with 3 replicas.
+
 ## v0.1.0: soft launch
 
 First tagged release, for an invite-only hosted beta.

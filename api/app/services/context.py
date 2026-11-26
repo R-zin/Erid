@@ -96,8 +96,24 @@ async def _require_task_in_workspace(db: AsyncSession, principal: Principal, tas
         raise NotFound(f"task '{task_id}' not found in workspace") from None
 
 
-async def list_tasks(db: AsyncSession, principal: Principal, status: TaskStatus | None = None) -> list[TaskOut]:
-    stmt = select(Task).where(Task.workspace_id == principal.workspace.id).order_by(Task.created_at)
+# Upper bound on one page of tasks: the list used to be unbounded.
+MAX_TASK_PAGE = 1000
+
+
+async def list_tasks(
+    db: AsyncSession,
+    principal: Principal,
+    status: TaskStatus | None = None,
+    limit: int = MAX_TASK_PAGE,
+    offset: int = 0,
+) -> list[TaskOut]:
+    stmt = (
+        select(Task)
+        .where(Task.workspace_id == principal.workspace.id)
+        .order_by(Task.created_at, Task.id)
+        .limit(min(limit, MAX_TASK_PAGE))
+        .offset(offset)
+    )
     if status is not None:
         stmt = stmt.where(Task.status == status)
     return [TaskOut.model_validate(t) for t in (await db.execute(stmt)).scalars().all()]

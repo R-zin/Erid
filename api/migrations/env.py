@@ -13,7 +13,7 @@ from alembic import context
 from app.core.settings import settings
 from app.db.session import Base
 from app.models import models  # noqa: F401  (register tables on Base.metadata)
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -45,14 +45,30 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# Session-level advisory lock that serializes migrations across processes.
+# Several API replicas (or a replica and a migration Job) starting together
+# would otherwise all run "upgrade head" at once and race on DDL. The first
+# takes the lock and migrates; the rest wait, then find nothing left to do.
+MIGRATION_LOCK_KEY = 0x45524944  # "ERID"
+
+
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(
-        connection=connection,
-        target_metadata=target_metadata,
-        compare_type=True,
-    )
-    with context.begin_transaction():
-        context.run_migrations()
+    serialize = connection.dialect.name == "postgresql"
+    if serialize:
+        connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": MIGRATION_LOCK_KEY})
+        connection.commit()  # the lock is session-level: it outlives this commit
+    try:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+    finally:
+        if serialize:
+            connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": MIGRATION_LOCK_KEY})
+            connection.commit()
 
 
 async def run_migrations_online() -> None:

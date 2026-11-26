@@ -1,21 +1,23 @@
 import asyncio
 import contextlib
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from app.api.routes import auth, context, context_misc
+from app.core.observability import TrafficMiddleware, readiness, render_metrics
 from app.core.settings import settings
 from app.db import session as db_session
 from app.db.session import init_db
 from app.mcp_server import endpoint as mcp_endpoint
 from app.services.errors import ServiceError
-from app.services.event_bus import close_event_bus
+from app.services.event_bus import close_event_bus, get_event_bus
 from app.services.events import prune_events
 
 logger = logging.getLogger("context_hub.main")
@@ -55,6 +57,9 @@ async def lifespan(app: FastAPI):
     # Bring the schema up to date. Runs Alembic "upgrade head" for real
     # databases; tests/SQLite create tables directly from the models instead.
     await init_db()
+    # Connect the event bus now rather than on first use, so a replica that
+    # can't LISTEN fails at startup (production) instead of mid-request.
+    await get_event_bus()
     pruner = asyncio.create_task(_prune_outbox_forever())
     try:
         async with mcp_endpoint.lifespan():
@@ -67,6 +72,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Context Hub API", lifespan=lifespan)
+
+# Metrics + load shedding. Added before CORS so CORS stays the outermost layer
+# and a shed 503 still carries CORS headers the dashboard can read.
+app.add_middleware(TrafficMiddleware)
 
 # The dashboard (web/) is served from a different origin. allow_origins=["*"]
 # with allow_credentials=True is invalid per the CORS spec, so enumerate the
@@ -101,7 +110,27 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_endpoint, methods=["GET", "P
 
 @app.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
+    """Liveness: the process is up. Never touches dependencies (a DB blip must not restart pods)."""
     return {"status": "ok"}
+
+
+@app.get("/ready", tags=["meta"])
+async def ready() -> JSONResponse:
+    """Readiness: the database answers and the event bus is connected (503 otherwise)."""
+    ok, checks = await readiness()
+    return JSONResponse({"status": "ready" if ok else "not ready", "checks": checks}, status_code=200 if ok else 503)
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics(request: Request) -> Response:
+    """Prometheus metrics. Guarded by ``ERID_METRICS_TOKEN`` when set."""
+    if settings.metrics_token:
+        auth = request.headers.get("authorization", "")
+        presented = auth[7:] if auth.lower().startswith("bearer ") else ""
+        if not secrets.compare_digest(presented.encode(), settings.metrics_token.encode()):
+            raise HTTPException(status_code=401, detail="metrics token required")
+    body, content_type = render_metrics()
+    return Response(body, media_type=content_type)
 
 
 _override_frontend_dist: Path | None = None

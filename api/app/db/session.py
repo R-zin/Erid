@@ -15,7 +15,19 @@ class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
 
 
-engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
+def _engine_options(url: str) -> dict:
+    options: dict = {"echo": False, "pool_pre_ping": True}
+    if url.startswith("postgresql"):
+        options.update(
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_timeout=settings.db_pool_timeout,
+            pool_recycle=settings.db_pool_recycle,
+        )
+    return options
+
+
+engine = create_async_engine(settings.database_url, **_engine_options(settings.database_url))
 
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -35,9 +47,18 @@ async def init_db() -> None:
     if settings.skip_migrations or engine.url.get_backend_name() == "sqlite":
         await create_schema()
         return
+    if not settings.run_migrations:
+        # Migrations run elsewhere (the Kubernetes migrate Job, or
+        # `python -m app.migrate`); this process just serves.
+        return
     # Run Alembic in a thread: it drives its own connection and must not block
     # the event loop.
     await asyncio.to_thread(_run_migrations)
+
+
+def run_migrations() -> None:
+    """Run Alembic ``upgrade head`` (serialized across processes by an advisory lock)."""
+    _run_migrations()
 
 
 def _run_migrations() -> None:

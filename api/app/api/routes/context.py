@@ -168,10 +168,13 @@ async def login_for_token(payload: TokenRequest, slug: str, db: AsyncSession = D
 @router.get("/workspaces/{slug}/tasks", response_model=list[TaskOut])
 async def list_tasks(
     status_filter: TaskStatus | None = Query(default=None, alias="status"),
+    limit: int = Query(default=svc.MAX_TASK_PAGE, ge=1, le=svc.MAX_TASK_PAGE),
+    offset: int = Query(default=0, ge=0),
     principal: Principal = Depends(READ),
     db: AsyncSession = Depends(get_db),
 ) -> list[TaskOut]:
-    return await svc.list_tasks(db, principal, status_filter)
+    """List tasks (oldest first), up to ``limit`` per page; page with ``offset``."""
+    return await svc.list_tasks(db, principal, status_filter, limit, offset)
 
 
 @router.post("/workspaces/{slug}/tasks", response_model=TaskOut, status_code=status.HTTP_201_CREATED)

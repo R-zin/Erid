@@ -79,6 +79,30 @@ class Settings:
     # off on a shared deployment so one team can't enumerate another's slugs;
     # the listing then needs the admin token.
     public_workspace_directory: bool = field(default_factory=lambda: _env_flag("ERID_PUBLIC_WORKSPACE_DIRECTORY", True))
+    # Deployment mode. "production" (or "prod") turns configuration warnings
+    # into startup errors (see app.core.production) and disables silent
+    # fallbacks that are only safe for a single local instance.
+    env: str = field(default_factory=lambda: os.getenv("ERID_ENV", "development").strip().lower())
+    # Run Alembic "upgrade head" when the API starts. Safe with many replicas
+    # (an advisory lock serializes them), but on Kubernetes the migrate Job does
+    # it once per rollout and pods set this to 0 to start faster.
+    run_migrations: bool = field(default_factory=lambda: _env_flag("ERID_RUN_MIGRATIONS", True))
+    # SQLAlchemy connection pool, per API process. Budget it: replicas x
+    # (pool_size + max_overflow) + 1 listener each must stay under Postgres
+    # max_connections (default 100), or put PgBouncer in front.
+    db_pool_size: int = field(default_factory=lambda: int(os.getenv("ERID_DB_POOL_SIZE", "10")))
+    db_max_overflow: int = field(default_factory=lambda: int(os.getenv("ERID_DB_MAX_OVERFLOW", "10")))
+    db_pool_timeout: float = field(default_factory=lambda: float(os.getenv("ERID_DB_POOL_TIMEOUT", "10")))
+    db_pool_recycle: int = field(default_factory=lambda: int(os.getenv("ERID_DB_POOL_RECYCLE", "1800")))
+    # Load shedding, per API process. Past these, new HTTP requests get 503 +
+    # Retry-After and new WebSockets are refused with close code 1013, so an
+    # overloaded instance degrades cleanly while the autoscaler adds replicas
+    # instead of falling over. 0 disables a limit.
+    max_inflight_requests: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_INFLIGHT_REQUESTS", "256")))
+    max_websockets: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_WEBSOCKETS", "2000")))
+    # Optional bearer token protecting GET /metrics (Prometheus). Empty leaves
+    # it open; keep it off the public ingress either way.
+    metrics_token: str = field(default_factory=lambda: os.getenv("ERID_METRICS_TOKEN", ""))
     # Skip Alembic migrations on startup (create tables directly instead). Used
     # by tests and local SQLite; production should leave this unset.
     skip_migrations: bool = field(default_factory=lambda: os.getenv("ERID_SKIP_MIGRATIONS", "") == "1")
@@ -120,6 +144,10 @@ class Settings:
     # Directory path to built frontend SPA assets (web/dist). When present, FastAPI
     # serves the web dashboard alongside the REST/WS API routes.
     frontend_dist_dir: str = field(default_factory=lambda: os.getenv("FRONTEND_DIST_DIR", ""))
+
+    @property
+    def is_production(self) -> bool:
+        return self.env in ("prod", "production")
 
 
 settings = Settings()

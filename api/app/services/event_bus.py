@@ -126,6 +126,11 @@ class PostgresEventBus(InProcessEventBus):
         self._supervisor: asyncio.Task | None = None
         self._ready = asyncio.Event()
 
+    @property
+    def connected(self) -> bool:
+        """True while the LISTEN connection is up (False during a reconnect)."""
+        return self._ready.is_set()
+
     async def start(self, timeout: float = 5.0) -> bool:
         """Start the listener; return ``False`` if Postgres can't be reached."""
         import asyncpg
@@ -231,6 +236,11 @@ async def get_event_bus() -> InProcessEventBus:
             logger.info("event bus: using Postgres LISTEN/NOTIFY")
             _bus = candidate
             return _bus
+        if settings.is_production:
+            # With several replicas an in-process bus silently stops delivering
+            # events written on other replicas. Fail loudly so the orchestrator
+            # restarts us, instead of serving WebSockets that miss events.
+            raise RuntimeError("event bus: Postgres LISTEN connection unavailable (required when ERID_ENV=production)")
         logger.warning("event bus: falling back to in-process bus (single instance only)")
 
     logger.info("event bus: using in-process backend")

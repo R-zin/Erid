@@ -26,6 +26,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.core.observability import EVENTS
 from app.core.settings import settings
 from app.models.models import Event, Workspace
 from app.services.event_bus import NOTIFY_CHANNEL, get_event_bus, notify_payload
@@ -69,6 +70,7 @@ async def emit(
         await db.flush()
         seq = row.id
     envelope = _envelope(workspace.slug, event_type, data, seq, now)
+    EVENTS.labels(event_type).inc()
 
     bus = await get_event_bus()
     if bus.transactional and db.bind.dialect.name == "postgresql":
@@ -142,8 +144,21 @@ async def load_envelope(slug: str, seq: int) -> dict[str, Any] | None:
         return _envelope(slug, row.type, row.data, row.id, row.created_at)
 
 
+# Transaction-level advisory lock so only one replica prunes at a time.
+PRUNE_LOCK_KEY = 0x45524945
+
+
 async def prune_events(db: AsyncSession) -> int:
-    """Delete outbox rows older than the retention window; return how many."""
+    """Delete outbox rows older than the retention window; return how many.
+
+    Every replica runs the pruner; on Postgres the first to take the advisory
+    lock does the delete and the rest skip that round.
+    """
+    if db.bind.dialect.name == "postgresql":
+        got = (await db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": PRUNE_LOCK_KEY})).scalar()
+        if not got:
+            await db.rollback()
+            return 0
     cutoff = datetime.now(UTC) - timedelta(hours=settings.event_retention_hours)
     result = await db.execute(delete(Event).where(Event.created_at < cutoff))
     await db.commit()

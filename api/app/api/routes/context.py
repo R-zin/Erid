@@ -24,10 +24,10 @@ from app.core.settings import settings
 from app.db.session import get_db
 from app.models.models import HandoffStatus, Permission, TaskStatus
 from app.schemas.schemas import (
+    SLUG_PATTERN,
     ActorCreated,
     ActorIn,
     ActorOut,
-    SLUG_PATTERN,
     ActorToken,
     DecisionIn,
     DecisionOut,

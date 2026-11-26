@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
@@ -29,6 +30,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.types import Receive, Scope, Send
 
@@ -50,6 +52,9 @@ from app.schemas.schemas import (
 from app.services import claims as claims_svc
 from app.services import context as svc
 from app.services import workspaces as ws_svc
+from app.services.errors import ServiceError
+
+logger = logging.getLogger("context_hub.mcp")
 
 WORKSPACE_HEADER = "X-Erid-Workspace"
 
@@ -128,7 +133,14 @@ async def _as[T](
             raise PermissionError(f"workspace '{resolved}': {detail}") from None
         if not principal.has(permission):
             raise PermissionError(f"credential lacks permission '{permission.value}' in workspace '{resolved}'")
-        return await op(db, principal)
+        try:
+            return await op(db, principal)
+        except ServiceError as exc:
+            raise ValueError(exc.detail) from None
+        except SQLAlchemyError:
+            # Never hand driver/SQL text to the client; it's in the server log.
+            logger.exception("MCP tool failed against the database (workspace %s)", resolved)
+            raise RuntimeError("internal error while running this tool; it has been logged") from None
 
 
 def _fmt(data: Any) -> str:
@@ -160,6 +172,8 @@ async def workspace_summary(ctx: Context, slug: str | None = None) -> str:
 @mcp.tool()
 async def search_context(q: str, ctx: Context, slug: str | None = None) -> str:
     """Search decisions and tasks in a workspace by free-text query."""
+    if not q.strip() or "\x00" in q or len(q) > 1000:
+        raise ValueError("q must be 1-1000 characters of text")
     return _fmt(await _as(ctx, slug, Permission.read, lambda db, p: svc.search(db, p, q)))
 
 

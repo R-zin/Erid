@@ -16,7 +16,7 @@ READ = require_action(Permission.read)
 
 @router.get("/workspaces/{slug}/search", response_model=SearchResults)
 async def search_workspace(
-    q: str = Query(..., min_length=1),
+    q: str = Query(..., min_length=1, max_length=1000),
     limit: int = Query(default=20, ge=1, le=100),
     principal: Principal = Depends(READ),
     db: AsyncSession = Depends(get_db),

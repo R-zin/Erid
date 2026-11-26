@@ -98,6 +98,32 @@ async def _reject(send: Send, status: int, detail: str) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+class NulByteGuard:
+    """422 for a NUL byte in the path or query string (raw or %00-encoded).
+
+    Postgres text can't hold NUL, so such a value reaching a query was a 500.
+    Request bodies are covered by ``InputModel`` in the schemas.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in ("http", "websocket"):
+            raw = scope.get("raw_path") or scope.get("path", "").encode()
+            query = scope.get("query_string", b"")
+            if b"\x00" in raw or b"%00" in raw.lower() or b"\x00" in query or b"%00" in query.lower():
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 1008, "reason": "NUL not allowed"})
+                else:
+                    await _reject(send, 422, "NUL characters are not allowed in the URL")
+                return
+            if "\x00" in scope.get("path", ""):
+                await _reject(send, 422, "NUL characters are not allowed in the URL")
+                return
+        await self.app(scope, receive, send)
+
+
 # Applied to API responses. The SPA and the interactive docs (which need
 # scripts and styles) only get the headers that can't break a page.
 _API_HEADERS = [

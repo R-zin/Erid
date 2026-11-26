@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from app.models.models import ActorRole, HandoffStatus, Permission, TaskStatus
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Column-backed limits: values longer than the database column must fail
 # validation (422) instead of reaching Postgres and failing there (500).
@@ -12,6 +12,30 @@ MAX_TEXT = 16_000  # free-text fields (Text columns, bounded to keep rows sane)
 # digits, ".", "_" and "-", starting with a letter or digit, up to 128 chars
 # (the column width). Rules out path tricks, spaces and unbounded lengths.
 SLUG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+
+def _reject_nul(value):
+    """Recursively refuse NUL characters: Postgres text can't store them (they
+    surfaced as 500s), and no legitimate field contains one."""
+    if isinstance(value, str):
+        if "\x00" in value:
+            raise ValueError("NUL characters are not allowed")
+    elif isinstance(value, dict):
+        for v in value.values():
+            _reject_nul(v)
+    elif isinstance(value, list | tuple):
+        for v in value:
+            _reject_nul(v)
+    return value
+
+
+class InputModel(BaseModel):
+    """Base for request bodies: rejects NUL characters anywhere in the payload."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_nul(cls, data):
+        return _reject_nul(data)
 
 
 class WorkspaceSummary(BaseModel):
@@ -60,7 +84,7 @@ class WorkspaceKeyRotated(BaseModel):
     api_key: str | None
 
 
-class DecisionIn(BaseModel):
+class DecisionIn(InputModel):
     title: str = Field(min_length=1, max_length=512)
     reason: str | None = Field(default=None, max_length=MAX_TEXT)
     related_files: str | None = Field(default=None, max_length=MAX_TEXT)
@@ -83,7 +107,7 @@ class DecisionOut(BaseModel):
     created_at: datetime
 
 
-class TaskIn(BaseModel):
+class TaskIn(InputModel):
     title: str = Field(min_length=1, max_length=512)
     assigned_to: str | None = Field(default=None, max_length=MAX_NAME)
     # Same attribution rule as DecisionIn.made_by.
@@ -91,7 +115,7 @@ class TaskIn(BaseModel):
     status: TaskStatus = TaskStatus.todo
 
 
-class TaskUpdate(BaseModel):
+class TaskUpdate(InputModel):
     title: str | None = Field(default=None, min_length=1, max_length=512)
     status: TaskStatus | None = None
     assigned_to: str | None = Field(default=None, max_length=MAX_NAME)
@@ -114,7 +138,7 @@ class TaskOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class HandoffIn(BaseModel):
+class HandoffIn(InputModel):
     """Create a handoff. ``summary`` is required; everything else is optional
     context that helps the next session resume safely."""
 
@@ -152,7 +176,7 @@ class HandoffOut(BaseModel):
     resolved_by: str | None
 
 
-class PresenceIn(BaseModel):
+class PresenceIn(InputModel):
     actor_name: str = Field(min_length=1, max_length=MAX_NAME)
     actor_type: str = Field(default="human", min_length=1, max_length=32)
     current_file: str | None = Field(default=None, max_length=512)
@@ -175,7 +199,7 @@ class PresenceOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ActorIn(BaseModel):
+class ActorIn(InputModel):
     name: str = Field(min_length=1, max_length=128)
     role: ActorRole = ActorRole.writer
     permissions: list[Permission] | None = None  # defaults to the role's grants
@@ -199,7 +223,7 @@ class ActorToken(BaseModel):
     expires_in: int
 
 
-class TokenRequest(BaseModel):
+class TokenRequest(InputModel):
     """Login: exchange an actor (or legacy workspace) API key for a JWT."""
 
     api_key: str = Field(min_length=1, max_length=512)
@@ -211,7 +235,7 @@ class ActorCreated(ActorOut):
     api_key: str | None
 
 
-class OAuthInviteIn(BaseModel):
+class OAuthInviteIn(InputModel):
     """Optional constraints on an OAuth invitation."""
 
     # When set, only a provider account whose *verified* email matches may redeem it.
@@ -260,7 +284,7 @@ class AuditEventOut(BaseModel):
 MAX_CLAIM_PATHS = 50
 
 
-class ClaimIn(BaseModel):
+class ClaimIn(InputModel):
     """Claim paths or globs before editing them. Re-claiming renews."""
 
     paths: list[str] = Field(min_length=1, max_length=MAX_CLAIM_PATHS)
@@ -301,7 +325,7 @@ class ClaimResult(BaseModel):
     conflicts: list[ClaimConflict]
 
 
-class ClaimCheckIn(BaseModel):
+class ClaimCheckIn(InputModel):
     paths: list[str] = Field(min_length=1, max_length=MAX_CLAIM_PATHS)
     holder: str | None = Field(default=None, max_length=MAX_NAME)
 
@@ -313,7 +337,7 @@ class ClaimCheck(BaseModel):
     claims: list[ClaimOut]
 
 
-class ReleaseIn(BaseModel):
+class ReleaseIn(InputModel):
     """Release your claims on these exact paths, or all of them when omitted."""
 
     paths: list[str] | None = Field(default=None, max_length=MAX_CLAIM_PATHS)

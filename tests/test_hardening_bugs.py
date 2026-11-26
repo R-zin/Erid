@@ -178,3 +178,35 @@ async def test_every_workspace_route_requires_credentials(client: AsyncClient, a
         r = await client.request(method, path, json={})
         assert r.status_code in (401, 403, 422), f"{method} {template} -> {r.status_code}"
         assert not (200 <= r.status_code < 300)
+
+
+# ---------------------------------------------------------------------------
+# Found by tests/test_api_fuzz.py
+# ---------------------------------------------------------------------------
+
+
+async def test_nul_bytes_are_422_not_a_database_error(client: AsyncClient, authed):
+    slug, headers = authed
+    r = await client.post(f"/api/workspaces/{slug}/tasks", json={"title": "a\x00b"}, headers=headers)
+    assert r.status_code == 422
+    r = await client.get(f"/api/workspaces/{slug}/search", params={"q": "x\x00"}, headers=headers)
+    assert r.status_code == 422
+    r = await client.post(f"/api/workspaces/{slug}%00x/token", json={"api_key": "k"})
+    assert r.status_code == 422
+
+
+async def test_lone_surrogate_in_json_is_422_without_echo(client: AsyncClient, authed):
+    slug, headers = authed
+    r = await client.post(
+        f"/api/workspaces/{slug}/tasks",
+        content=b'{"title": "\\ud800' + b"z" * 5000 + b'"}',
+        headers={**headers, "content-type": "application/json"},
+    )
+    assert r.status_code == 422
+    assert "zzzz" not in r.text  # the offending input is not reflected back
+
+
+async def test_huge_offset_is_422(client: AsyncClient, authed):
+    slug, headers = authed
+    r = await client.get(f"/api/workspaces/{slug}/tasks", params={"offset": 2**63}, headers=headers)
+    assert r.status_code == 422

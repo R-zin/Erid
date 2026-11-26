@@ -63,6 +63,10 @@ router = APIRouter()
 # Dead/half-open clients raise on this send instead of blocking the loop forever.
 WS_HEARTBEAT_SECS = 30
 
+# Largest pagination offset accepted. Unbounded, a huge offset overflowed the
+# database's integer type (a 500); nobody pages a million rows deep.
+MAX_OFFSET = 1_000_000
+
 READ = require_action(Permission.read)
 WRITE_TASKS = require_action(Permission.write_tasks)
 WRITE_DECISIONS = require_action(Permission.write_decisions)
@@ -210,7 +214,7 @@ async def delete_actor(
 async def list_audit_events(
     action: str | None = Query(default=None, max_length=64),
     limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=MAX_OFFSET),
     principal: Principal = Depends(ADMIN),
     db: AsyncSession = Depends(get_db),
 ) -> list[AuditEventOut]:
@@ -249,7 +253,7 @@ async def login_for_token(
 async def list_tasks(
     status_filter: TaskStatus | None = Query(default=None, alias="status"),
     limit: int = Query(default=svc.MAX_TASK_PAGE, ge=1, le=svc.MAX_TASK_PAGE),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=MAX_OFFSET),
     principal: Principal = Depends(READ),
     db: AsyncSession = Depends(get_db),
 ) -> list[TaskOut]:
@@ -425,6 +429,11 @@ async def workspace_events(websocket: WebSocket, slug: str):
     try:
         since = int(since_raw) if since_raw is not None else None
     except ValueError:
+        await websocket.close(code=1008, reason="invalid 'since'")
+        return
+    if since is not None and not -(2**63) <= since < 2**63:
+        # Outside BIGINT the database can't compare it (that raised instead of
+        # replying); no real seq is anywhere near that range.
         await websocket.close(code=1008, reason="invalid 'since'")
         return
 

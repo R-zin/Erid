@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
@@ -14,6 +15,7 @@ from app.api.routes import auth, claims, context, context_misc
 from app.core import ratelimit
 from app.core.hardening import (
     BodySizeLimitMiddleware,
+    NulByteGuard,
     OriginGuardMiddleware,
     SecurityHeadersMiddleware,
     check_configuration,
@@ -90,6 +92,7 @@ app = FastAPI(
 # Origin guard, and CORS outermost so even refusals carry CORS headers the
 # dashboard can read.
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(NulByteGuard)
 app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(TrafficMiddleware)
 app.add_middleware(OriginGuardMiddleware)
@@ -104,6 +107,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """422 listing where and why validation failed, without echoing the input.
+
+    FastAPI's default handler reflects each offending value back. That turned a
+    body containing a lone UTF-16 surrogate into a 500 (the reply couldn't be
+    encoded) and bounced 20k-character payloads straight back to the sender.
+    """
+    detail = [
+        {"loc": list(err.get("loc", ())), "msg": str(err.get("msg", "")), "type": str(err.get("type", ""))}
+        for err in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.exception_handler(ServiceError)

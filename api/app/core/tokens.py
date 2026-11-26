@@ -44,6 +44,8 @@ def issue_token(
     subject: str,
     role: str | None = None,
     name: str | None = None,
+    workspace_id: str | None = None,
+    key_fingerprint: str | None = None,
 ) -> str:
     """Sign a short-lived access token identifying a principal in a workspace.
 
@@ -52,6 +54,11 @@ def issue_token(
     only other form is the legacy workspace-key token, whose subject is the
     workspace slug with ``role="owner"``. ``name`` is informational (display /
     attribution hints for clients); verification never trusts it.
+
+    ``workspace_id`` pins the token to one workspace *instance*, so a token
+    can't carry over to a different workspace that later reuses the slug.
+    ``key_fingerprint`` (workspace-key tokens only) pins it to the key that
+    minted it, so rotating a leaked key also kills the tokens minted from it.
     """
     now = datetime.now(UTC)
     claims = {
@@ -64,6 +71,10 @@ def issue_token(
     }
     if name is not None:
         claims["name"] = name
+    if workspace_id is not None:
+        claims["wid"] = workspace_id
+    if key_fingerprint is not None:
+        claims["kfp"] = key_fingerprint
     return jwt.encode(claims, _PRIVATE_KEY, algorithm="EdDSA")
 
 
@@ -79,3 +90,8 @@ def verify_token(token: str) -> dict | None:
         )
     except jwt.PyJWTError:
         return None
+
+
+def key_fingerprint(key_hash: str | None) -> str | None:
+    """Short, non-reversible tag of a stored key digest, embedded in workspace-key tokens."""
+    return key_hash[:16] if key_hash else None

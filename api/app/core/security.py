@@ -20,6 +20,7 @@ Authorization is fine-grained: each route declares the action it requires via
 :func:`require_action`.
 """
 
+import re
 import secrets
 import uuid
 from collections.abc import Callable, Coroutine
@@ -35,10 +36,19 @@ from sqlalchemy.orm import selectinload
 
 from app.core.keys import hash_api_key, key_matches
 from app.core.settings import settings
-from app.core.tokens import verify_token
+from app.core.tokens import key_fingerprint, verify_token
 from app.db.session import get_db
 from app.models.models import ROLE_GRANTS, Actor, ActorRole, Permission, Workspace
+from app.schemas.schemas import SLUG_PATTERN
 from app.services.workspaces import get_or_create_workspace, get_workspace_by_slug
+
+_SLUG_RE = re.compile(SLUG_PATTERN)
+
+
+def is_valid_slug(slug: str | None) -> bool:
+    """True for a slug that could have been provisioned (see ``SLUG_PATTERN``)."""
+    return bool(slug) and _SLUG_RE.fullmatch(slug) is not None
+
 
 # auto_error=False so we can return a precise 401/403 ourselves and so WS
 # connections (which can't set headers easily) can pass the key as a query param.
@@ -165,7 +175,12 @@ async def resolve_credentials(
 
     if bearer:
         claims = verify_token(bearer)
-        if claims and claims.get("workspace") == workspace.slug:
+        # ``wid`` pins a token to this workspace *instance*: a token minted for
+        # a deleted workspace must not work on a new one that reuses the slug.
+        # (Actor tokens issued before ``wid`` existed still resolve by actor id,
+        # which already can't match an actor of a different workspace.)
+        wid = claims.get("wid") if claims else None
+        if claims and claims.get("workspace") == workspace.slug and wid in (None, str(workspace.id)):
             # Actor tokens carry the actor's *id* as ``sub`` and resolve by id
             # within this workspace, so a name collision (or a name reused
             # after an actor is deleted) can never alias a different actor.
@@ -175,8 +190,16 @@ async def resolve_credentials(
                 actor = await _find_actor_by_id(db, workspace, actor_id)
                 if actor is not None:
                     return await _actor_principal(actor, workspace)
-            elif claims.get("role") == ActorRole.owner.value and claims["sub"] == workspace.slug:
-                # Token minted from the legacy workspace key acts as owner directly.
+            elif (
+                claims.get("role") == ActorRole.owner.value
+                and claims["sub"] == workspace.slug
+                and wid is not None
+                and claims.get("kfp") is not None
+                and secrets.compare_digest(str(claims["kfp"]), key_fingerprint(workspace.api_key_hash) or "")
+            ):
+                # Token minted from the legacy workspace key acts as owner, but
+                # only while that key is still the workspace's key: rotating it
+                # (or deleting the workspace) kills every token minted from it.
                 return Principal(
                     kind=PrincipalKind.legacy_key,
                     workspace=workspace,
@@ -206,6 +229,10 @@ async def _resolve_workspace(db: AsyncSession, slug: str) -> Workspace | None:
     ``workspaces`` table by requesting arbitrary slugs, nor pre-create a slug it
     then claims via ``POST /workspaces/{slug}/secure`` before the real team does.
     """
+    if not is_valid_slug(slug):
+        # Never create (or even look up) a slug that could not have been
+        # provisioned: over-long values would otherwise hit the column limit.
+        return None
     if settings.allow_open_workspaces:
         return await get_or_create_workspace(db, slug)
     return await get_workspace_by_slug(db, slug)

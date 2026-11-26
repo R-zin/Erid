@@ -135,7 +135,13 @@ async def oauth_callback(
     actor = await _resolve_or_create_oauth_actor(db, provider, profile, slug, invite=invite)
     # ``sub`` is the actor's id, never its name: verification resolves by id
     # within the workspace, so a token can't alias a same-named actor.
-    token = issue_token(workspace_slug=slug, subject=str(actor.id), role=actor.role.value, name=actor.name)
+    token = issue_token(
+        workspace_slug=slug,
+        subject=str(actor.id),
+        role=actor.role.value,
+        name=actor.name,
+        workspace_id=str(actor.workspace_id),
+    )
 
     # quote_via=quote (not quote_plus) keeps the JWT's [A-Za-z0-9._-] chars
     # literal in the fragment, so clients/tests can split it on "&" simply.

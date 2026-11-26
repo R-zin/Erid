@@ -4,6 +4,15 @@ from datetime import datetime
 from app.models.models import ActorRole, HandoffStatus, Permission, TaskStatus
 from pydantic import BaseModel, ConfigDict, Field
 
+# Column-backed limits: values longer than the database column must fail
+# validation (422) instead of reaching Postgres and failing there (500).
+MAX_NAME = 128  # String(128) columns: actor/author/assignee names
+MAX_TEXT = 16_000  # free-text fields (Text columns, bounded to keep rows sane)
+# Workspace slugs: what may be provisioned or implicitly created. Letters,
+# digits, ".", "_" and "-", starting with a letter or digit, up to 128 chars
+# (the column width). Rules out path tricks, spaces and unbounded lengths.
+SLUG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
 
 class WorkspaceSummary(BaseModel):
     slug: str
@@ -52,12 +61,12 @@ class WorkspaceKeyRotated(BaseModel):
 
 class DecisionIn(BaseModel):
     title: str = Field(min_length=1, max_length=512)
-    reason: str | None = None
-    related_files: str | None = None
+    reason: str | None = Field(default=None, max_length=MAX_TEXT)
+    related_files: str | None = Field(default=None, max_length=MAX_TEXT)
     # Ignored when authenticated with a per-actor key/token: the actor's own
     # name is recorded instead. Honoured for shared credentials (open
     # workspaces, the legacy workspace key), which identify no one in particular.
-    made_by: str | None = None
+    made_by: str | None = Field(default=None, max_length=MAX_NAME)
     task_id: uuid.UUID | None = None  # link this decision to a task
 
 
@@ -75,16 +84,16 @@ class DecisionOut(BaseModel):
 
 class TaskIn(BaseModel):
     title: str = Field(min_length=1, max_length=512)
-    assigned_to: str | None = None
+    assigned_to: str | None = Field(default=None, max_length=MAX_NAME)
     # Same attribution rule as DecisionIn.made_by.
-    created_by: str | None = None
+    created_by: str | None = Field(default=None, max_length=MAX_NAME)
     status: TaskStatus = TaskStatus.todo
 
 
 class TaskUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=512)
     status: TaskStatus | None = None
-    assigned_to: str | None = None
+    assigned_to: str | None = Field(default=None, max_length=MAX_NAME)
 
 
 class TaskOut(BaseModel):
@@ -143,10 +152,10 @@ class HandoffOut(BaseModel):
 
 
 class PresenceIn(BaseModel):
-    actor_name: str = Field(min_length=1, max_length=128)
-    actor_type: str = "human"
-    current_file: str | None = None
-    current_task: str | None = None
+    actor_name: str = Field(min_length=1, max_length=MAX_NAME)
+    actor_type: str = Field(default="human", min_length=1, max_length=32)
+    current_file: str | None = Field(default=None, max_length=512)
+    current_task: str | None = Field(default=None, max_length=512)
 
 
 class PresenceOut(BaseModel):
@@ -192,7 +201,7 @@ class ActorToken(BaseModel):
 class TokenRequest(BaseModel):
     """Login: exchange an actor (or legacy workspace) API key for a JWT."""
 
-    api_key: str = Field(min_length=1)
+    api_key: str = Field(min_length=1, max_length=512)
 
 
 class ActorCreated(ActorOut):

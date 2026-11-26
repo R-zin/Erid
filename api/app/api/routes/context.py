@@ -27,6 +27,7 @@ from app.schemas.schemas import (
     ActorCreated,
     ActorIn,
     ActorOut,
+    SLUG_PATTERN,
     ActorToken,
     DecisionIn,
     DecisionOut,
@@ -78,7 +79,7 @@ OWNER = require_action(Permission.owner)
     dependencies=[Depends(require_operator_if_configured)],
 )
 async def provision_workspace(
-    slug: str = Query(..., min_length=1), db: AsyncSession = Depends(get_db)
+    slug: str = Query(..., min_length=1, max_length=128, pattern=SLUG_PATTERN), db: AsyncSession = Depends(get_db)
 ) -> WorkspaceCreated:
     """Create a workspace and return its API key (shown only here; never re-disclosed).
 

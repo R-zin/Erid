@@ -135,6 +135,10 @@ class Settings:
             "ERID_EXPOSE_DOCS", os.getenv("ERID_ENV", "development").strip().lower() not in ("prod", "production")
         )
     )
+    # Secret scanning on writes: "redact" (default) replaces credentials found
+    # in task/decision/handoff/claim text with [REDACTED:<rule>]; "reject"
+    # refuses the write (422); "off" disables it. See app.core.secret_scan.
+    secret_scanning: str = field(default_factory=lambda: os.getenv("ERID_SECRET_SCANNING", "redact"))
     # How long audit events are kept.
     audit_retention_days: int = field(default_factory=lambda: int(os.getenv("ERID_AUDIT_RETENTION_DAYS", "90")))
     # Optional bearer token protecting GET /metrics (Prometheus). Empty leaves

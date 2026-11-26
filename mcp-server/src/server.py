@@ -162,6 +162,60 @@ async def update_presence(
     )
 
 
+# ---------------------------------------------------------------------------
+# File claims — advisory leases so agents don't edit the same files at once.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def claim_files(
+    paths: list[str],
+    ttl_seconds: int = 3600,
+    exclusive: bool = True,
+    reason: str | None = None,
+    task_id: str | None = None,
+    holder: str | None = None,
+    slug: str | None = None,
+) -> str:
+    """Claim files before editing them so other agents and humans don't collide with you.
+
+    ``paths`` are repo-relative files, directories (``src/auth/``) or globs
+    (``src/**/*.py``). Paths nobody else holds are granted; any that overlap
+    someone else's claim come back under ``conflicts`` with who holds them and
+    why: pick other work or coordinate before editing those. Claims expire
+    after ``ttl_seconds`` (default 1h); claim again to renew. Release them with
+    ``release_files`` when done. Use ``exclusive=False`` for read-only work."""
+    return _fmt(
+        await _get_client().claim_files(
+            _slug(slug),
+            paths,
+            ttl_seconds=ttl_seconds,
+            exclusive=exclusive,
+            reason=reason,
+            task_id=task_id,
+            holder=holder,
+        )
+    )
+
+
+@mcp.tool()
+async def release_files(paths: list[str] | None = None, holder: str | None = None, slug: str | None = None) -> str:
+    """Release your file claims on ``paths`` (or all of them if omitted) once you're done editing."""
+    return _fmt(await _get_client().release_files(_slug(slug), paths=paths, holder=holder))
+
+
+@mcp.tool()
+async def list_claims(path: str | None = None, slug: str | None = None) -> str:
+    """List active file claims (who is editing what), optionally only those overlapping ``path``."""
+    return _fmt(await _get_client().list_claims(_slug(slug), path=path))
+
+
+@mcp.tool()
+async def check_files(paths: list[str], holder: str | None = None, slug: str | None = None) -> str:
+    """Check whether anyone else has claimed these files, without claiming them."""
+    return _fmt(await _get_client().check_files(_slug(slug), paths, holder=holder))
+
+
 @mcp.tool()
 async def list_workspaces() -> str:
     """List every workspace on the hub (slug, name, created_at, secured).

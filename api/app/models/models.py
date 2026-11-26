@@ -321,3 +321,29 @@ class AuditEvent(Base):
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class FileClaim(Base):
+    """An advisory lease on a path or glob: "I'm about to edit these files".
+
+    Coordination, not a lock: nothing stops a write, but every agent and human
+    can see who holds what, and a conflicting claim is refused with the
+    holder's details. ``exclusive`` claims conflict with any other holder's
+    overlapping claim; shared ones only with exclusive ones. A claim lapses at
+    ``expires_at`` (its holder renews by claiming again) or when released.
+    """
+
+    __tablename__ = "file_claims"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    path: Mapped[str] = mapped_column(String(512))
+    holder: Mapped[str] = mapped_column(String(128), index=True)
+    exclusive: Mapped[bool] = mapped_column(Boolean, default=True)
+    reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

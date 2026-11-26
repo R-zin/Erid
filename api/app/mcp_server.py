@@ -37,7 +37,17 @@ from app.core.security import Principal, resolve_principal
 from app.core.settings import settings
 from app.db.session import get_db
 from app.models.models import HandoffStatus, Permission, TaskStatus
-from app.schemas.schemas import DecisionIn, HandoffIn, PresenceIn, TaskIn, TaskUpdate
+from app.schemas.schemas import (
+    ClaimCheckIn,
+    ClaimIn,
+    DecisionIn,
+    HandoffIn,
+    PresenceIn,
+    ReleaseIn,
+    TaskIn,
+    TaskUpdate,
+)
+from app.services import claims as claims_svc
 from app.services import context as svc
 from app.services import workspaces as ws_svc
 
@@ -256,6 +266,63 @@ async def update_presence(
         actor_name=actor_name, actor_type=actor_type, current_file=current_file, current_task=current_task
     )
     return _fmt(await _as(ctx, slug, Permission.presence, lambda db, p: svc.update_presence(db, p, payload)))
+
+
+# ---------------------------------------------------------------------------
+# File claims — advisory leases so agents don't edit the same files at once.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def claim_files(
+    paths: list[str],
+    ctx: Context,
+    ttl_seconds: int = 3600,
+    exclusive: bool = True,
+    reason: str | None = None,
+    task_id: str | None = None,
+    holder: str | None = None,
+    slug: str | None = None,
+) -> str:
+    """Claim files before editing them so other agents and humans don't collide with you.
+
+    ``paths`` are repo-relative files, directories (``src/auth/``) or globs
+    (``src/**/*.py``). Paths nobody else holds are granted; any that overlap
+    someone else's claim come back under ``conflicts`` with who holds them and
+    why: pick other work or coordinate before editing those. Claims expire
+    after ``ttl_seconds`` (default 1h); claim again to renew. Release them with
+    ``release_files`` when done. Use ``exclusive=False`` for read-only work."""
+    payload = ClaimIn(
+        paths=paths,
+        ttl_seconds=ttl_seconds,
+        exclusive=exclusive,
+        reason=reason,
+        task_id=_uuid(task_id, "task_id") if task_id else None,
+        holder=holder,
+    )
+    return _fmt(await _as(ctx, slug, Permission.presence, lambda db, p: claims_svc.claim(db, p, payload)))
+
+
+@mcp.tool()
+async def release_files(
+    ctx: Context, paths: list[str] | None = None, holder: str | None = None, slug: str | None = None
+) -> str:
+    """Release your file claims on ``paths`` (or all of them if omitted) once you're done editing."""
+    payload = ReleaseIn(paths=paths, holder=holder)
+    return _fmt(await _as(ctx, slug, Permission.presence, lambda db, p: claims_svc.release(db, p, payload)))
+
+
+@mcp.tool()
+async def list_claims(ctx: Context, path: str | None = None, slug: str | None = None) -> str:
+    """List active file claims (who is editing what), optionally only those overlapping ``path``."""
+    return _fmt(await _as(ctx, slug, Permission.read, lambda db, p: claims_svc.list_claims(db, p, path)))
+
+
+@mcp.tool()
+async def check_files(paths: list[str], ctx: Context, holder: str | None = None, slug: str | None = None) -> str:
+    """Check whether anyone else has claimed these files, without claiming them."""
+    payload = ClaimCheckIn(paths=paths, holder=holder)
+    return _fmt(await _as(ctx, slug, Permission.read, lambda db, p: claims_svc.check(db, p, payload)))
 
 
 @mcp.tool()

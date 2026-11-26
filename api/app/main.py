@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from app.api.routes import auth, context, context_misc
+from app.api.routes import auth, claims, context, context_misc
 from app.core import ratelimit
 from app.core.hardening import (
     BodySizeLimitMiddleware,
@@ -25,6 +25,7 @@ from app.db import session as db_session
 from app.db.session import init_db
 from app.mcp_server import endpoint as mcp_endpoint
 from app.services import audit
+from app.services import claims as claims_svc
 from app.services.errors import ServiceError
 from app.services.event_bus import close_event_bus, get_event_bus
 from app.services.events import prune_events
@@ -43,6 +44,7 @@ async def _housekeeping_forever() -> None:
                 removed = await prune_events(db)
                 await ratelimit.shared.prune(db)
                 await audit.prune(db)
+                await claims_svc.prune(db)
             if removed:
                 logger.info("pruned %d expired events from the outbox", removed)
         except Exception:  # noqa: BLE001 - housekeeping must never take the app down
@@ -115,6 +117,8 @@ app.include_router(context.router, prefix="/api", tags=["context"])
 app.include_router(context_misc.router, prefix="/api", tags=["context_misc"])
 # Social login (OAuth) endpoints — open; they mint the same JWT as /token.
 app.include_router(auth.router, prefix="/api", tags=["auth"])
+# Advisory file claims (leases) for coordinating edits.
+app.include_router(claims.router, prefix="/api", tags=["claims"])
 
 
 # MCP over Streamable HTTP. A plain Route (not a Mount) so POST /mcp is served

@@ -22,6 +22,7 @@ class WorkspaceSummary(BaseModel):
     decision_count: int = 0
     open_handoff_count: int = 0
     active_developers: list[str] = Field(default_factory=list)
+    active_claim_count: int = 0
 
 
 class WorkspaceOut(BaseModel):
@@ -250,3 +251,74 @@ class AuditEventOut(BaseModel):
     client_ip: str | None
     detail: dict | None
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# File claims (advisory leases)
+# ---------------------------------------------------------------------------
+
+MAX_CLAIM_PATHS = 50
+
+
+class ClaimIn(BaseModel):
+    """Claim paths or globs before editing them. Re-claiming renews."""
+
+    paths: list[str] = Field(min_length=1, max_length=MAX_CLAIM_PATHS)
+    # How long the claim lasts unless renewed or released (1 min to 24 h).
+    ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
+    # Exclusive: nobody else may claim an overlapping path. Shared: others may
+    # hold shared claims too (e.g. several agents reading a module).
+    exclusive: bool = True
+    reason: str | None = Field(default=None, max_length=1000)
+    task_id: uuid.UUID | None = None
+    # Same attribution rule as DecisionIn.made_by.
+    holder: str | None = Field(default=None, max_length=MAX_NAME)
+
+
+class ClaimOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    path: str
+    holder: str
+    exclusive: bool
+    reason: str | None
+    task_id: uuid.UUID | None
+    created_at: datetime
+    expires_at: datetime
+
+
+class ClaimConflict(BaseModel):
+    """A requested path that overlaps claims held by someone else."""
+
+    path: str
+    held_by: list[ClaimOut]
+
+
+class ClaimResult(BaseModel):
+    ok: bool  # every requested path was granted
+    granted: list[ClaimOut]
+    conflicts: list[ClaimConflict]
+
+
+class ClaimCheckIn(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=MAX_CLAIM_PATHS)
+    holder: str | None = Field(default=None, max_length=MAX_NAME)
+
+
+class ClaimCheck(BaseModel):
+    path: str
+    # True when a claim by someone else covers this path.
+    claimed_by_others: bool
+    claims: list[ClaimOut]
+
+
+class ReleaseIn(BaseModel):
+    """Release your claims on these exact paths, or all of them when omitted."""
+
+    paths: list[str] | None = Field(default=None, max_length=MAX_CLAIM_PATHS)
+    holder: str | None = Field(default=None, max_length=MAX_NAME)
+
+
+class ReleaseResult(BaseModel):
+    released: list[uuid.UUID]

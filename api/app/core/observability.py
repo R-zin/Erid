@@ -45,6 +45,7 @@ SHED = Counter("erid_load_shed_total", "Requests or connections refused because 
 WEBSOCKETS = Gauge("erid_websocket_connections", "Open WebSocket connections")
 EVENTS = Counter("erid_events_emitted_total", "Workspace events emitted", ["type"])
 RATE_LIMITED = Counter("erid_rate_limited_total", "Requests rejected by a rate limit", ["scope"])
+SECRETS_FOUND = Counter("erid_secrets_found_total", "Credentials found in written text by secret scanning", ["rule"])
 AUTH_FAILURES = Counter("erid_auth_failures_total", "Requests rejected for bad or missing credentials")
 DB_POOL_IN_USE = Gauge("erid_db_pool_connections_in_use", "Database connections checked out of the pool")
 EVENT_BUS_UP = Gauge("erid_event_bus_connected", "1 when the Postgres LISTEN connection is up (or the bus is local)")

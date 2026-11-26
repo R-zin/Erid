@@ -26,8 +26,10 @@ if config.config_file_name is not None:
 # Autogenerate diffs against the ORM models.
 target_metadata = Base.metadata
 
-# Point Alembic at the app's database (async URL; asyncpg / aiosqlite).
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Point Alembic at the app's database (async URL; asyncpg / aiosqlite). Use the
+# direct URL: the advisory lock below is session-level, which a
+# transaction-pooling PgBouncer would not preserve.
+config.set_main_option("sqlalchemy.url", settings.direct_database_url)
 
 
 def run_migrations_offline() -> None:

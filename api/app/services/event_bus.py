@@ -231,7 +231,8 @@ async def get_event_bus() -> InProcessEventBus:
         return _bus
 
     if _wanted_backend() == "postgres":
-        candidate = PostgresEventBus(settings.database_url)
+        # LISTEN needs a dedicated session, so it bypasses any pooler.
+        candidate = PostgresEventBus(settings.direct_database_url)
         if await candidate.start():
             logger.info("event bus: using Postgres LISTEN/NOTIFY")
             _bus = candidate

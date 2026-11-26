@@ -94,6 +94,18 @@ class Settings:
     db_max_overflow: int = field(default_factory=lambda: int(os.getenv("ERID_DB_MAX_OVERFLOW", "10")))
     db_pool_timeout: float = field(default_factory=lambda: float(os.getenv("ERID_DB_POOL_TIMEOUT", "10")))
     db_pool_recycle: int = field(default_factory=lambda: int(os.getenv("ERID_DB_POOL_RECYCLE", "1800")))
+    # Direct (unpooled) Postgres URL for the two things a transaction-pooling
+    # PgBouncer breaks: the event bus's LISTEN connection and the migration
+    # advisory lock. Defaults to DATABASE_URL; set it when DATABASE_URL points
+    # at PgBouncer.
+    direct_database_url: str = field(
+        default_factory=lambda: (
+            os.getenv("ERID_DIRECT_DATABASE_URL") or os.getenv("DATABASE_URL", _database_url_default())
+        )
+    )
+    # Set when DATABASE_URL goes through PgBouncer in transaction mode:
+    # disables asyncpg's prepared-statement caches, which that mode can't hold.
+    db_pgbouncer: bool = field(default_factory=lambda: _env_flag("ERID_DB_PGBOUNCER", False))
     # Load shedding, per API process. Past these, new HTTP requests get 503 +
     # Retry-After and new WebSockets are refused with close code 1013, so an
     # overloaded instance degrades cleanly while the autoscaler adds replicas

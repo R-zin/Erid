@@ -15,13 +15,27 @@
 	# REST, WebSocket (/api/.../ws), MCP over HTTP, health and API docs.
 	@api path /api/* /mcp /mcp/* /health /docs /docs/* /openapi.json
 	handle @api {
-		reverse_proxy api:8000 {
+		reverse_proxy {
+			# Every API replica: re-resolve the compose service's A records so
+			# replicas added or removed with --scale are picked up.
+			dynamic a api 8000 {
+				refresh 5s
+			}
+			lb_policy least_conn
+			# If a replica is down or restarting, retry another for up to 5s.
+			lb_try_duration 5s
+			lb_try_interval 250ms
+			# Passive health: take a replica out for 30s after failures or
+			# load-shedding 503s.
+			fail_duration 30s
+			max_fails 3
+			unhealthy_status 503
 			flush_interval -1
 		}
 	}
 
 	# Everything else is the dashboard SPA.
 	handle {
-		reverse_proxy web:80
+		reverse_proxy web:8080
 	}
 }

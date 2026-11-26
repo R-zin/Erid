@@ -24,6 +24,11 @@ def _engine_options(url: str) -> dict:
             pool_timeout=settings.db_pool_timeout,
             pool_recycle=settings.db_pool_recycle,
         )
+        if settings.db_pgbouncer:
+            # PgBouncer (transaction mode) hands each transaction a different
+            # server connection, so server-side prepared statements can't be
+            # cached across them.
+            options["connect_args"] = {"statement_cache_size": 0, "prepared_statement_cache_size": 0}
     return options
 
 
@@ -66,7 +71,9 @@ def _run_migrations() -> None:
     from app.models import models  # noqa: F401
 
     cfg = Config(str(_API_ROOT / "alembic.ini"))
-    cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    # The direct URL: the migration lock is session-level, which a
+    # transaction-pooling PgBouncer would not preserve.
+    cfg.set_main_option("sqlalchemy.url", settings.direct_database_url)
     command.upgrade(cfg, "head")
 
 

@@ -15,7 +15,9 @@ COPY src ./src
 RUN npm run build   # emits web/dist
 
 # ---- serve stage -------------------------------------------------------------
-FROM nginx:1.27-alpine
+# Unprivileged nginx: runs as uid 101 and listens on 8080, so the container
+# needs no root and works under Kubernetes runAsNonRoot.
+FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 # Reverse-proxy config: server block + the http-context WebSocket upgrade map.
 COPY nginx.conf /etc/nginx/conf.d/default.conf
@@ -23,5 +25,5 @@ COPY nginx.websocket.conf /etc/nginx/conf.d/websocket.conf
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
-EXPOSE 80
+EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]

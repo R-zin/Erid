@@ -11,6 +11,8 @@
 #     ERID_DOMAIN are missing.
 #   * Postgres data lives in a named volume so `docker compose down` keeps it.
 #     Note: POSTGRES_PASSWORD only takes effect when the volume is first created.
+#   * The API runs as ERID_API_REPLICAS replicas (default 2); Caddy balances
+#     across them and retries another replica if one is down or restarting.
 
 services:
   postgres:
@@ -22,9 +24,22 @@ services:
 
   api:
     ports: !reset []
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
-              "--proxy-headers", "--forwarded-allow-ips", "*"]
+    # Horizontal scale: N identical replicas behind Caddy, sharing Postgres for
+    # state and LISTEN/NOTIFY for realtime fan-out. Change with
+    # ERID_API_REPLICAS or `docker compose ... up -d --scale api=N`. (Compose
+    # does not autoscale; for that, use the Kubernetes HPA in deploy/k8s/.)
+    deploy:
+      replicas: ${ERID_API_REPLICAS:-2}
     environment:
+      ERID_ENV: production
+      EVENT_BUS_BACKEND: postgres
+      # Only Caddy reaches the API on the compose network, so its
+      # X-Forwarded-For is trusted for the client address.
+      FORWARDED_ALLOW_IPS: "*"
+      # Per-replica connection budget: replicas x (5 + 5) + 1 LISTEN each.
+      ERID_DB_POOL_SIZE: ${ERID_DB_POOL_SIZE:-5}
+      ERID_DB_MAX_OVERFLOW: ${ERID_DB_MAX_OVERFLOW:-5}
+      ERID_METRICS_TOKEN: ${ERID_METRICS_TOKEN:-}
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/erid
       CORS_ORIGINS: https://${ERID_DOMAIN:?set ERID_DOMAIN in .env}
       ERID_ALLOW_OPEN_WORKSPACES: ${ERID_ALLOW_OPEN_WORKSPACES:-0}

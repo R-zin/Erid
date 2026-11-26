@@ -7,8 +7,9 @@
 #     /api, /mcp, /health, /docs to the API and everything else to the dashboard.
 #   * api and web are no longer published on host ports; only Caddy is.
 #   * Closed mode by default (no anonymous workspaces) and secrets are REQUIRED:
-#     compose refuses to start if POSTGRES_PASSWORD, ERID_ADMIN_TOKEN or
-#     ERID_DOMAIN are missing.
+#     compose refuses to start if POSTGRES_PASSWORD, ERID_ADMIN_TOKEN,
+#     ERID_DOMAIN or the JWT keypair are missing, and the API itself
+#     (ERID_ENV=production) refuses any other unsafe setting.
 #   * Postgres data lives in a named volume so `docker compose down` keeps it.
 #     Note: POSTGRES_PASSWORD only takes effect when the volume is first created.
 #   * The API runs as ERID_API_REPLICAS replicas (default 2); Caddy balances
@@ -40,6 +41,10 @@ services:
       ERID_DB_POOL_SIZE: ${ERID_DB_POOL_SIZE:-5}
       ERID_DB_MAX_OVERFLOW: ${ERID_DB_MAX_OVERFLOW:-5}
       ERID_METRICS_TOKEN: ${ERID_METRICS_TOKEN:-}
+      # Production mode refuses to start without a stable signing keypair:
+      # replicas must verify each other's tokens. See .env.example.
+      ERID_JWT_PRIVATE_KEY: ${ERID_JWT_PRIVATE_KEY:?set ERID_JWT_PRIVATE_KEY in .env}
+      ERID_JWT_PUBLIC_KEY: ${ERID_JWT_PUBLIC_KEY:?set ERID_JWT_PUBLIC_KEY in .env}
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/erid
       CORS_ORIGINS: https://${ERID_DOMAIN:?set ERID_DOMAIN in .env}
       ERID_ALLOW_OPEN_WORKSPACES: ${ERID_ALLOW_OPEN_WORKSPACES:-0}

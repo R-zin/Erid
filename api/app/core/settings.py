@@ -112,6 +112,31 @@ class Settings:
     # instead of falling over. 0 disables a limit.
     max_inflight_requests: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_INFLIGHT_REQUESTS", "256")))
     max_websockets: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_WEBSOCKETS", "2000")))
+    # Rate limits ("<count>/<second|minute|hour>", count 0 disables one).
+    # auth: per client IP, shared by all replicas, on key->token login,
+    #   provisioning, claiming and OAuth.
+    # auth_failures: rejected credentials per client IP before it is locked
+    #   out for the rest of the window (shared).
+    # api: per workspace + credential, counted per replica (so the cluster-wide
+    #   ceiling is about replicas x this).
+    rate_limits_enabled: bool = field(default_factory=lambda: _env_flag("ERID_RATE_LIMITS", True))
+    rate_limit_auth: str = field(default_factory=lambda: os.getenv("ERID_RATE_LIMIT_AUTH", "30/minute"))
+    rate_limit_auth_failures: str = field(
+        default_factory=lambda: os.getenv("ERID_RATE_LIMIT_AUTH_FAILURES", "20/minute")
+    )
+    rate_limit_api: str = field(default_factory=lambda: os.getenv("ERID_RATE_LIMIT_API", "1200/minute"))
+    # Largest request body accepted, in bytes (413 beyond). Free-text fields
+    # are capped at 16k characters, so 1 MiB is generous.
+    max_body_bytes: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_BODY_BYTES", str(1024 * 1024))))
+    # Serve the interactive API docs (/docs, /redoc, /openapi.json). On by
+    # default in development, off in production unless set to 1.
+    expose_docs: bool = field(
+        default_factory=lambda: _env_flag(
+            "ERID_EXPOSE_DOCS", os.getenv("ERID_ENV", "development").strip().lower() not in ("prod", "production")
+        )
+    )
+    # How long audit events are kept.
+    audit_retention_days: int = field(default_factory=lambda: int(os.getenv("ERID_AUDIT_RETENTION_DAYS", "90")))
     # Optional bearer token protecting GET /metrics (Prometheus). Empty leaves
     # it open; keep it off the public ingress either way.
     metrics_token: str = field(default_factory=lambda: os.getenv("ERID_METRICS_TOKEN", ""))

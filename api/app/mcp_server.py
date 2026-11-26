@@ -32,6 +32,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.types import Receive, Scope, Send
 
+from app.core import ratelimit
 from app.core.security import Principal, resolve_principal
 from app.core.settings import settings
 from app.db.session import get_db
@@ -98,13 +99,20 @@ async def _as[T](
     )
     async with _session() as db:
         try:
+            ip = ratelimit.client_ip(request)
             principal = await resolve_principal(
                 resolved,
                 db,
                 request.headers.get(settings.api_key_header),
                 request.query_params.get("api_key"),
                 bearer,
+                ip=ip,
             )
+            caller = ratelimit.credential_fingerprint(
+                request.headers.get(settings.api_key_header) or request.query_params.get("api_key"),
+                bearer.credentials if bearer else None,
+            )
+            ratelimit.enforce_api_limit(resolved, caller or ip)
         except Exception as exc:  # HTTPException from the shared resolver
             detail = getattr(exc, "detail", None) or str(exc)
             raise PermissionError(f"workspace '{resolved}': {detail}") from None

@@ -9,12 +9,15 @@ import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import ratelimit
+from app.core.ratelimit import auth_rate_limit, client_ip
 from app.core.security import (
     Principal,
     is_operator,
+    is_valid_slug,
     operator_token,
     require_action,
     require_operator_if_configured,
@@ -29,6 +32,7 @@ from app.schemas.schemas import (
     ActorIn,
     ActorOut,
     ActorToken,
+    AuditEventOut,
     DecisionIn,
     DecisionOut,
     HandoffIn,
@@ -44,9 +48,10 @@ from app.schemas.schemas import (
     WorkspaceListItem,
     WorkspaceSecured,
 )
+from app.services import audit, events
 from app.services import context as svc
-from app.services import events
 from app.services import workspaces as ws_svc
+from app.services.errors import Forbidden
 from app.services.event_bus import get_event_bus
 
 logger = logging.getLogger("context_hub.routes")
@@ -76,16 +81,22 @@ OWNER = require_action(Permission.owner)
     "/workspaces",
     response_model=WorkspaceCreated,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_operator_if_configured)],
+    dependencies=[Depends(auth_rate_limit), Depends(require_operator_if_configured)],
 )
 async def provision_workspace(
-    slug: str = Query(..., min_length=1, max_length=128, pattern=SLUG_PATTERN), db: AsyncSession = Depends(get_db)
+    request: Request,
+    slug: str = Query(..., min_length=1, max_length=128, pattern=SLUG_PATTERN),
+    db: AsyncSession = Depends(get_db),
 ) -> WorkspaceCreated:
     """Create a workspace and return its API key (shown only here; never re-disclosed).
 
     Requires ``X-Admin-Token`` when ``ERID_ADMIN_TOKEN`` is configured.
     """
-    return await ws_svc.provision_workspace(db, slug)
+    created = await ws_svc.provision_workspace(db, slug)
+    if created.api_key is not None:
+        workspace = await ws_svc.get_workspace_by_slug(db, slug)
+        await audit.record(db, "workspace.provisioned", workspace=workspace, ip=client_ip(request))
+    return created
 
 
 @router.get("/workspaces", response_model=list[WorkspaceListItem])
@@ -104,27 +115,50 @@ async def list_workspaces(
 
 
 @router.delete("/workspaces/{slug}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_workspace(principal: Principal = Depends(OWNER), db: AsyncSession = Depends(get_db)) -> None:
+async def delete_workspace(
+    request: Request, principal: Principal = Depends(OWNER), db: AsyncSession = Depends(get_db)
+) -> None:
     """Delete an entire workspace and everything in it (owner only)."""
+    workspace_id, slug = principal.workspace.id, principal.workspace.slug
     await ws_svc.delete_workspace(db, principal)
+    # Kept after deletion (no foreign key), findable by slug for operators.
+    await audit.record(
+        db,
+        "workspace.deleted",
+        slug=slug,
+        actor=principal.actor_name,
+        ip=client_ip(request),
+        detail={"workspace_id": str(workspace_id)},
+    )
 
 
-@router.post("/workspaces/{slug}/secure", response_model=WorkspaceSecured)
-async def secure_workspace(slug: str, db: AsyncSession = Depends(get_db)) -> WorkspaceSecured:
+@router.post("/workspaces/{slug}/secure", response_model=WorkspaceSecured, dependencies=[Depends(auth_rate_limit)])
+async def secure_workspace(slug: str, request: Request, db: AsyncSession = Depends(get_db)) -> WorkspaceSecured:
     """Claim an open workspace by minting its key (returned once).
 
     Unauthenticated by design (an open workspace has no admin to gate on), and
     refused when ``ERID_ALLOW_OPEN_WORKSPACES=0``.
     """
-    return await ws_svc.secure_workspace(db, slug)
+    result = await ws_svc.secure_workspace(db, slug)
+    if result.api_key is not None:
+        workspace = await ws_svc.get_workspace_by_slug(db, slug)
+        await audit.record(db, "workspace.claimed", workspace=workspace, ip=client_ip(request))
+    return result
 
 
 @router.post("/workspaces/{slug}/rotate-key", response_model=WorkspaceKeyRotated)
 async def rotate_workspace_key(
-    principal: Principal = Depends(OWNER), db: AsyncSession = Depends(get_db)
+    request: Request, principal: Principal = Depends(OWNER), db: AsyncSession = Depends(get_db)
 ) -> WorkspaceKeyRotated:
-    """Rotate the workspace key (owner only). Returns the new key once."""
-    return await ws_svc.rotate_workspace_key(db, principal)
+    """Rotate the workspace key (owner only). Returns the new key once.
+
+    Tokens minted from the old key stop working immediately.
+    """
+    rotated = await ws_svc.rotate_workspace_key(db, principal)
+    await audit.record(
+        db, "workspace.key_rotated", workspace=principal.workspace, actor=principal.actor_name, ip=client_ip(request)
+    )
+    return rotated
 
 
 # ---------------------------------------------------------------------------
@@ -134,10 +168,20 @@ async def rotate_workspace_key(
 
 @router.post("/workspaces/{slug}/actors", response_model=ActorCreated, status_code=status.HTTP_201_CREATED)
 async def create_actor(
-    payload: ActorIn, principal: Principal = Depends(ADMIN), db: AsyncSession = Depends(get_db)
+    payload: ActorIn, request: Request, principal: Principal = Depends(ADMIN), db: AsyncSession = Depends(get_db)
 ) -> ActorCreated:
     """Mint a new actor with its own API key (shown only here; stored hashed)."""
-    return await ws_svc.create_actor(db, principal, payload)
+    created = await ws_svc.create_actor(db, principal, payload)
+    await audit.record(
+        db,
+        "actor.created",
+        workspace=principal.workspace,
+        actor=principal.actor_name,
+        target=created.name,
+        ip=client_ip(request),
+        detail={"role": created.role.value, "actor_id": str(created.id)},
+    )
+    return created
 
 
 @router.get("/workspaces/{slug}/actors", response_model=list[ActorOut])
@@ -148,16 +192,52 @@ async def list_actors(principal: Principal = Depends(ADMIN), db: AsyncSession = 
 
 @router.delete("/workspaces/{slug}/actors/{actor_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_actor(
-    actor_id: uuid.UUID, principal: Principal = Depends(ADMIN), db: AsyncSession = Depends(get_db)
+    actor_id: uuid.UUID, request: Request, principal: Principal = Depends(ADMIN), db: AsyncSession = Depends(get_db)
 ) -> None:
-    """Revoke an actor (its keys and grants stop working)."""
+    """Revoke an actor (its keys, tokens and grants stop working)."""
     await ws_svc.delete_actor(db, principal, actor_id)
+    await audit.record(
+        db,
+        "actor.revoked",
+        workspace=principal.workspace,
+        actor=principal.actor_name,
+        target=str(actor_id),
+        ip=client_ip(request),
+    )
 
 
-@router.post("/workspaces/{slug}/token", response_model=ActorToken)
-async def login_for_token(payload: TokenRequest, slug: str, db: AsyncSession = Depends(get_db)) -> ActorToken:
+@router.get("/workspaces/{slug}/audit", response_model=list[AuditEventOut])
+async def list_audit_events(
+    action: str | None = Query(default=None, max_length=64),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(ADMIN),
+    db: AsyncSession = Depends(get_db),
+) -> list[AuditEventOut]:
+    """The workspace's audit trail, newest first (admins only).
+
+    Provisioning, claiming, key rotation, actor changes, token issuance and
+    refusals, OAuth logins and invites, and rejected credentials.
+    """
+    return await audit.list_events(db, principal.workspace, action=action, limit=limit, offset=offset)
+
+
+@router.post("/workspaces/{slug}/token", response_model=ActorToken, dependencies=[Depends(auth_rate_limit)])
+async def login_for_token(
+    payload: TokenRequest, slug: str, request: Request, db: AsyncSession = Depends(get_db)
+) -> ActorToken:
     """Exchange an actor (or legacy workspace) API key for a short-lived JWT."""
-    return await ws_svc.exchange_key_for_token(db, slug, payload.api_key)
+    ip = client_ip(request)
+    ratelimit.reject_if_locked_out(ip)
+    workspace = await ws_svc.get_workspace_by_slug(db, slug) if is_valid_slug(slug) else None
+    try:
+        token = await ws_svc.exchange_key_for_token(db, slug, payload.api_key)
+    except Forbidden:
+        await audit.record(db, "token.denied", workspace=workspace, slug=slug, outcome="denied", ip=ip)
+        await ratelimit.record_auth_failure(db, ip)
+        raise
+    await audit.record(db, "token.issued", workspace=workspace, ip=ip)
+    return token
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +437,8 @@ async def workspace_events(websocket: WebSocket, slug: str):
         try:
             key = websocket.query_params.get("api_key") or websocket.headers.get(settings.api_key_header)
             token = websocket.query_params.get("token")
-            principal = await resolve_ws_principal(slug, db, key=key, token=token)
+            ip = websocket.client.host if websocket.client else None
+            principal = await resolve_ws_principal(slug, db, key=key, token=token, ip=ip)
             if principal is None or not principal.has(Permission.read):
                 await websocket.close(code=1008, reason="invalid credentials")
                 return

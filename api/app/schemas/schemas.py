@@ -235,3 +235,18 @@ class SearchResults(BaseModel):
     query: str
     decisions: list[DecisionOut]
     tasks: list[TaskOut]
+
+
+class AuditEventOut(BaseModel):
+    """One entry in a workspace's audit trail."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action: str
+    actor: str | None
+    target: str | None
+    outcome: str
+    client_ip: str | None
+    detail: dict | None
+    created_at: datetime

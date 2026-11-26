@@ -11,11 +11,20 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from app.api.routes import auth, context, context_misc
+from app.core import ratelimit
+from app.core.hardening import (
+    BodySizeLimitMiddleware,
+    OriginGuardMiddleware,
+    SecurityHeadersMiddleware,
+    check_configuration,
+    install_log_redaction,
+)
 from app.core.observability import TrafficMiddleware, readiness, render_metrics
 from app.core.settings import settings
 from app.db import session as db_session
 from app.db.session import init_db
 from app.mcp_server import endpoint as mcp_endpoint
+from app.services import audit
 from app.services.errors import ServiceError
 from app.services.event_bus import close_event_bus, get_event_bus
 from app.services.events import prune_events
@@ -26,56 +35,62 @@ logger = logging.getLogger("context_hub.main")
 PRUNE_INTERVAL_SECS = 3600
 
 
-async def _prune_outbox_forever() -> None:
+async def _housekeeping_forever() -> None:
+    """Hourly: prune the event outbox, past rate-limit windows and old audit events."""
     while True:
         try:
             async with db_session.AsyncSessionLocal() as db:
                 removed = await prune_events(db)
+                await ratelimit.shared.prune(db)
+                await audit.prune(db)
             if removed:
                 logger.info("pruned %d expired events from the outbox", removed)
         except Exception:  # noqa: BLE001 - housekeeping must never take the app down
-            logger.exception("event outbox prune failed")
+            logger.exception("housekeeping failed")
         await asyncio.sleep(PRUNE_INTERVAL_SECS)
-
-
-def _warn_insecure_config() -> None:
-    """Log loudly when the running config is only safe for local development."""
-    if settings.allow_open_workspaces:
-        logger.warning(
-            "ERID_ALLOW_OPEN_WORKSPACES is on: unknown slugs are created on first touch with full anonymous "
-            "access. Set ERID_ALLOW_OPEN_WORKSPACES=0 on any deployment strangers can reach."
-        )
-    if not settings.admin_token:
-        logger.warning("ERID_ADMIN_TOKEN is unset: anyone who can reach the API can provision workspaces.")
-    if not (settings.jwt_private_key and settings.jwt_public_key):
-        logger.warning("ERID_JWT_PRIVATE_KEY/PUBLIC_KEY unset: using an ephemeral keypair; tokens die on restart.")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _warn_insecure_config()
+    # Unsafe settings are warnings in development and a startup error with
+    # ERID_ENV=production.
+    check_configuration()
+    install_log_redaction()
     # Bring the schema up to date. Runs Alembic "upgrade head" for real
     # databases; tests/SQLite create tables directly from the models instead.
     await init_db()
     # Connect the event bus now rather than on first use, so a replica that
     # can't LISTEN fails at startup (production) instead of mid-request.
     await get_event_bus()
-    pruner = asyncio.create_task(_prune_outbox_forever())
+    housekeeping = asyncio.create_task(_housekeeping_forever())
     try:
         async with mcp_endpoint.lifespan():
             yield
     finally:
-        pruner.cancel()
+        housekeeping.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await pruner
+            await housekeeping
         await close_event_bus()
 
 
-app = FastAPI(title="AI Context Hub API", lifespan=lifespan)
+_docs = settings.expose_docs
+app = FastAPI(
+    title="AI Context Hub API",
+    lifespan=lifespan,
+    # Interactive docs are off in production unless ERID_EXPOSE_DOCS=1.
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 
-# Metrics + load shedding. Added before CORS so CORS stays the outermost layer
-# and a shed 503 still carries CORS headers the dashboard can read.
+# Middleware runs outermost-last-added. From the inside out: security headers
+# and the body limit wrap the app, then metrics + load shedding, then the
+# Origin guard, and CORS outermost so even refusals carry CORS headers the
+# dashboard can read.
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(TrafficMiddleware)
+app.add_middleware(OriginGuardMiddleware)
 
 # The dashboard (web/) is served from a different origin. allow_origins=["*"]
 # with allow_credentials=True is invalid per the CORS spec, so enumerate the

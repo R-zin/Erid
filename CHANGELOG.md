@@ -35,6 +35,9 @@ Full details: [`docs/production.md`](docs/production.md).
 ### Fixed
 - 500s on over-long fields, NUL characters, lone surrogates and huge offsets;
   MCP errors leaking database internals.
+- 24 known vulnerabilities in dependencies: certifi 2026.11.20, cryptography
+  50.0.2, mcp 1.30.0, pyjwt 2.15.1. The API image now installs the hash-pinned
+  `api/requirements.lock` (exported from `uv.lock`) instead of open-ended ranges.
 
 ### Testing
 - API and MCP fuzzing, Hypothesis properties, migration/model drift and

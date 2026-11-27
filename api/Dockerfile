@@ -6,8 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Exactly the versions in uv.lock, hash-verified, nothing else (--no-deps):
+# what CI tests and audits is what ships. Regenerate after changing deps:
+#   uv export --frozen --no-dev --no-emit-project --format requirements-txt -o api/requirements.lock
+COPY requirements.lock .
+RUN pip install --no-deps --require-hashes -r requirements.lock
 
 COPY . .
 

@@ -428,10 +428,11 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: Audit Python dependencies (locked versions)
-        run: |
-          uv export --frozen --no-dev --no-emit-project --format requirements-txt > /tmp/requirements.txt
-          uvx pip-audit --strict --disable-pip -r /tmp/requirements.txt
+      # api/requirements.lock is what the API image installs (hash-pinned, kept
+      # in sync with uv.lock by tests/test_dependency_lock.py), so this audits
+      # exactly what ships. pip-audit itself is pinned as a dev dependency.
+      - name: Audit Python dependencies (what the API image installs)
+        run: uv run --frozen pip-audit --strict --disable-pip -r api/requirements.lock
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

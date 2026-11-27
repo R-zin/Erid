@@ -63,7 +63,7 @@ Each replica uses up to `ERID_DB_POOL_SIZE + ERID_DB_MAX_OVERFLOW` connections, 
 | Origin checks | `/mcp` (per the MCP spec, against DNS rebinding) and WebSocket handshakes (cross-site hijacking) refuse browser origins outside `CORS_ORIGINS`. CLI and editor clients send no Origin and are unaffected. |
 | Log hygiene | `api_key`, `token`, `code` and `state` query values are redacted from access logs. MCP errors never include driver or SQL text. |
 | Containers | Non-root, read-only root filesystem, all capabilities dropped, seccomp `RuntimeDefault`, `restricted` Pod Security, NetworkPolicies. |
-| Supply chain | CI audits locked Python dependencies (pip-audit) and the dashboard's runtime npm dependencies. |
+| Supply chain | The API image installs `api/requirements.lock`: exactly the versions in `uv.lock`, hash-verified, `--no-deps`, kept in sync by a test. CI audits that file (pip-audit) and the dashboard's runtime npm dependencies. The first audit found 24 known vulnerabilities in `certifi`, `cryptography`, `mcp` and `pyjwt`; all are upgraded. |
 
 ## File claims
 

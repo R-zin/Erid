@@ -20,6 +20,7 @@ Authorization is fine-grained: each route declares the action it requires via
 :func:`require_action`.
 """
 
+import re
 import secrets
 import uuid
 from collections.abc import Callable, Coroutine
@@ -27,18 +28,28 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from fastapi import Depends, HTTPException, Security, status
+from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, APIKeyQuery, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import ratelimit
 from app.core.keys import hash_api_key, key_matches
 from app.core.settings import settings
-from app.core.tokens import verify_token
+from app.core.tokens import key_fingerprint, verify_token
 from app.db.session import get_db
 from app.models.models import ROLE_GRANTS, Actor, ActorRole, Permission, Workspace
+from app.schemas.schemas import SLUG_PATTERN
 from app.services.workspaces import get_or_create_workspace, get_workspace_by_slug
+
+_SLUG_RE = re.compile(SLUG_PATTERN)
+
+
+def is_valid_slug(slug: str | None) -> bool:
+    """True for a slug that could have been provisioned (see ``SLUG_PATTERN``)."""
+    return bool(slug) and _SLUG_RE.fullmatch(slug) is not None
+
 
 # auto_error=False so we can return a precise 401/403 ourselves and so WS
 # connections (which can't set headers easily) can pass the key as a query param.
@@ -165,7 +176,12 @@ async def resolve_credentials(
 
     if bearer:
         claims = verify_token(bearer)
-        if claims and claims.get("workspace") == workspace.slug:
+        # ``wid`` pins a token to this workspace *instance*: a token minted for
+        # a deleted workspace must not work on a new one that reuses the slug.
+        # (Actor tokens issued before ``wid`` existed still resolve by actor id,
+        # which already can't match an actor of a different workspace.)
+        wid = claims.get("wid") if claims else None
+        if claims and claims.get("workspace") == workspace.slug and wid in (None, str(workspace.id)):
             # Actor tokens carry the actor's *id* as ``sub`` and resolve by id
             # within this workspace, so a name collision (or a name reused
             # after an actor is deleted) can never alias a different actor.
@@ -175,8 +191,16 @@ async def resolve_credentials(
                 actor = await _find_actor_by_id(db, workspace, actor_id)
                 if actor is not None:
                     return await _actor_principal(actor, workspace)
-            elif claims.get("role") == ActorRole.owner.value and claims["sub"] == workspace.slug:
-                # Token minted from the legacy workspace key acts as owner directly.
+            elif (
+                claims.get("role") == ActorRole.owner.value
+                and claims["sub"] == workspace.slug
+                and wid is not None
+                and claims.get("kfp") is not None
+                and secrets.compare_digest(str(claims["kfp"]), key_fingerprint(workspace.api_key_hash) or "")
+            ):
+                # Token minted from the legacy workspace key acts as owner, but
+                # only while that key is still the workspace's key: rotating it
+                # (or deleting the workspace) kills every token minted from it.
                 return Principal(
                     kind=PrincipalKind.legacy_key,
                     workspace=workspace,
@@ -206,6 +230,10 @@ async def _resolve_workspace(db: AsyncSession, slug: str) -> Workspace | None:
     ``workspaces`` table by requesting arbitrary slugs, nor pre-create a slug it
     then claims via ``POST /workspaces/{slug}/secure`` before the real team does.
     """
+    if not is_valid_slug(slug):
+        # Never create (or even look up) a slug that could not have been
+        # provisioned: over-long values would otherwise hit the column limit.
+        return None
     if settings.allow_open_workspaces:
         return await get_or_create_workspace(db, slug)
     return await get_workspace_by_slug(db, slug)
@@ -217,18 +245,26 @@ async def resolve_principal(
     header_key: str | None,
     query_key: str | None,
     bearer: HTTPAuthorizationCredentials | None,
+    *,
+    ip: str | None = None,
 ) -> Principal:
     """Resolve a request to a Principal, handling open workspaces.
 
     Unlike :func:`resolve_credentials`, this never fails for an open workspace
     (no key configured): it returns an open Principal with full access — unless
     ``allow_open_workspaces`` is off, in which case nothing is ever open.
+
+    A client (``ip``) that presents too many rejected credentials is locked out
+    with 429 for the rest of the rate-limit window, before its next attempt is
+    even evaluated.
     """
+    key = header_key or query_key
+    bearer_token = bearer.credentials if bearer else None
+    if ip and (key or bearer_token):
+        ratelimit.reject_if_locked_out(ip)
     workspace = await _resolve_workspace(db, slug)
     if workspace is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"workspace '{slug}' not found")
-    key = header_key or query_key
-    bearer_token = bearer.credentials if bearer else None
 
     if not workspace.secured:
         # Open workspace (no shared key). An actor credential may still carry
@@ -258,8 +294,17 @@ async def resolve_principal(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"missing credentials (provide the {settings.api_key_header} header or a Bearer token)",
             )
+        await _note_rejected_credential(db, workspace, ip)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid credentials")
     return principal
+
+
+async def _note_rejected_credential(db: AsyncSession, workspace: Workspace, ip: str | None) -> None:
+    from app.services import audit
+
+    await audit.record(db, "auth.rejected", workspace=workspace, outcome="denied", ip=ip)
+    if ip:
+        await ratelimit.record_auth_failure(db, ip)
 
 
 async def resolve_ws_principal(
@@ -268,19 +313,29 @@ async def resolve_ws_principal(
     *,
     key: str | None,
     token: str | None,
+    ip: str | None = None,
 ) -> Principal | None:
     """Resolve a WebSocket connection (query/header credentials) to a Principal.
 
     Returns an open Principal for keyless workspaces, ``None`` when credentials
     are required but missing/invalid — the caller closes the socket with 1008.
-    An unknown slug is also ``None`` when open workspaces are disabled.
+    An unknown slug is also ``None`` when open workspaces are disabled, and so
+    is a client locked out for too many rejected credentials.
     """
+    if ip and (key or token):
+        try:
+            ratelimit.reject_if_locked_out(ip)
+        except HTTPException:
+            return None
     workspace = await _resolve_workspace(db, slug)
     if workspace is None:
         return None
     principal = await resolve_credentials(db, workspace, key=key, bearer=token)
     if principal is not None:
         return principal
+    if key or token:
+        await _note_rejected_credential(db, workspace, ip)
+        return None
     if settings.allow_open_workspaces and not workspace.secured and not (key or token):
         return Principal(
             kind=PrincipalKind.open,
@@ -296,12 +351,16 @@ def require_action(action: Permission) -> Callable[..., Coroutine[Any, Any, Prin
 
     async def dependency(
         slug: str,
+        request: Request,
         db: AsyncSession = Depends(get_db),
         header_key: str | None = Security(_header_scheme),
         query_key: str | None = Security(_query_scheme),
         bearer: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
     ) -> Principal:
-        principal = await resolve_principal(slug, db, header_key, query_key, bearer)
+        ip = ratelimit.client_ip(request)
+        principal = await resolve_principal(slug, db, header_key, query_key, bearer, ip=ip)
+        caller = ratelimit.credential_fingerprint(header_key or query_key, bearer.credentials if bearer else None)
+        ratelimit.enforce_api_limit(slug, caller or ip)
         if not principal.has(action):
             who = principal.actor_name or (
                 "legacy workspace key" if principal.kind == PrincipalKind.legacy_key else "anonymous"

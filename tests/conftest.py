@@ -22,6 +22,11 @@ TEST_DATABASE_URL = os.environ.get("ERID_TEST_DATABASE_URL") or "sqlite+aiosqlit
 IS_POSTGRES = TEST_DATABASE_URL.startswith("postgresql")
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("EVENT_BUS_BACKEND", "memory")
+# The suite makes many logins and provisioning calls from one test client
+# address; real limits are exercised in tests/test_security_hardening.py.
+os.environ.setdefault("ERID_RATE_LIMIT_AUTH", "100000/minute")
+os.environ.setdefault("ERID_RATE_LIMIT_AUTH_FAILURES", "100000/minute")
+os.environ.setdefault("ERID_RATE_LIMIT_API", "1000000/minute")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
@@ -64,6 +69,16 @@ if IS_POSTGRES:
 
     _session.engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     _session.AsyncSessionLocal = async_sessionmaker(_session.engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_state():
+    """Per-replica limiter counters and lockouts must not leak between tests."""
+    from app.core import ratelimit
+
+    ratelimit.reset_local_state()
+    yield
+    ratelimit.reset_local_state()
 
 
 @pytest.fixture

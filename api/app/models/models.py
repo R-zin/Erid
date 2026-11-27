@@ -285,3 +285,65 @@ class Event(Base):
     type: Mapped[str] = mapped_column(String(64))
     data: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class RateLimitCounter(Base):
+    """Fixed-window request counter shared by every API replica.
+
+    One row per (key, window start). Incremented with an atomic upsert, so a
+    limit holds across replicas, unlike an in-process counter. Rows from past
+    windows are pruned periodically.
+    """
+
+    __tablename__ = "rate_limits"
+
+    key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AuditEvent(Base):
+    """Security-relevant action: who, what, when, from where, and the outcome.
+
+    Deliberately has no foreign key to ``workspaces``, so the trail outlives a
+    deleted workspace (``workspace_slug`` keeps it findable).
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    workspace_slug: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    target: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16), default="success")
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class FileClaim(Base):
+    """An advisory lease on a path or glob: "I'm about to edit these files".
+
+    Coordination, not a lock: nothing stops a write, but every agent and human
+    can see who holds what, and a conflicting claim is refused with the
+    holder's details. ``exclusive`` claims conflict with any other holder's
+    overlapping claim; shared ones only with exclusive ones. A claim lapses at
+    ``expires_at`` (its holder renews by claiming again) or when released.
+    """
+
+    __tablename__ = "file_claims"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    path: Mapped[str] = mapped_column(String(512))
+    holder: Mapped[str] = mapped_column(String(128), index=True)
+    exclusive: Mapped[bool] = mapped_column(Boolean, default=True)
+    reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

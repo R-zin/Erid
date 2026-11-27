@@ -38,14 +38,13 @@ should not attract strangers.
 
 ### Known gaps (acceptable for a soft launch, fix before a public launch)
 
-- No rate limiting on `/api/workspaces/{slug}/token` or the OAuth endpoints. Keys are
-  high-entropy, so guessing is impractical. Add limits at Caddy or in the app before
-  opening up.
 - The dashboard's "create workspace" button won't work once `ERID_ADMIN_TOKEN` is set.
   The operator provisions workspaces with curl (below).
-- Single host, single API instance. The Postgres event bus already supports more
-  instances when needed.
-- No usage metrics or error reporting. Watch `docker compose logs api` for now.
+- No error reporting service (Sentry or similar). Watch the logs, and the Prometheus
+  metrics described in `docs/production.md`.
+
+Rate limiting, metrics and running several API instances, all gaps in earlier
+versions of this list, are now built in; see `docs/production.md`.
 
 ## 2. Onboarding a tester
 

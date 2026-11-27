@@ -1,0 +1,15 @@
+# Prometheus Operator: scrape the API's /metrics. If ERID_METRICS_TOKEN is
+# set, add `authorization: {credentials: {name: erid-secrets, key: ERID_METRICS_TOKEN}}`.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: erid-api
+  namespace: erid
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: erid-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

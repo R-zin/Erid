@@ -29,7 +29,7 @@ from app.schemas.schemas import (
     WorkspaceSummary,
 )
 from app.services import events
-from app.services.errors import Conflict, NotFound
+from app.services.errors import Conflict, NotFound, Unprocessable
 from sqlalchemy import func, literal_column, or_, select
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -71,6 +71,49 @@ def _dump(model) -> dict:
     return model.model_dump(mode="json")
 
 
+# Column widths for fields that redaction could lengthen past their limit.
+_FIELD_WIDTH = {"title": 512, "current_task": 512, "current_file": 512}
+
+
+async def scrub(db: AsyncSession, principal: Principal, payload, fields: tuple[str, ...], *, widths=None):
+    """Run secret scanning over ``fields`` of ``payload``.
+
+    Returns the payload with credentials redacted (default), or raises 422 in
+    ``reject`` mode. Either way the finding is audited (rule names only,
+    never the secret).
+    """
+    from app.core import secret_scan
+    from app.core.observability import SECRETS_FOUND
+    from app.services import audit
+
+    values = {f: getattr(payload, f) for f in fields}
+    cleaned, findings = secret_scan.scan_fields(values)
+    if not findings:
+        return payload
+    labels = sorted({f"{x.field}:{x.rule}" for x in findings})
+    for finding in findings:
+        SECRETS_FOUND.labels(finding.rule).inc()
+    rejecting = secret_scan.mode() == "reject"
+    await audit.record(
+        db,
+        "secret.rejected" if rejecting else "secret.redacted",
+        workspace=principal.workspace,
+        actor=principal.actor_name,
+        outcome="denied" if rejecting else "success",
+        detail={"findings": labels},
+    )
+    if rejecting:
+        raise Unprocessable(
+            f"refused: this looks like it contains credentials ({', '.join(labels)}). "
+            "Remove them and retry; secrets written here are shared with every collaborator and agent."
+        )
+    widths = {**_FIELD_WIDTH, **(widths or {})}
+    for field, value in cleaned.items():
+        if value is not None and field in widths:
+            cleaned[field] = value[: widths[field]]
+    return payload.model_copy(update=cleaned)
+
+
 # ---------------------------------------------------------------------------
 # Tasks
 # ---------------------------------------------------------------------------
@@ -96,14 +139,31 @@ async def _require_task_in_workspace(db: AsyncSession, principal: Principal, tas
         raise NotFound(f"task '{task_id}' not found in workspace") from None
 
 
-async def list_tasks(db: AsyncSession, principal: Principal, status: TaskStatus | None = None) -> list[TaskOut]:
-    stmt = select(Task).where(Task.workspace_id == principal.workspace.id).order_by(Task.created_at)
+# Upper bound on one page of tasks: the list used to be unbounded.
+MAX_TASK_PAGE = 1000
+
+
+async def list_tasks(
+    db: AsyncSession,
+    principal: Principal,
+    status: TaskStatus | None = None,
+    limit: int = MAX_TASK_PAGE,
+    offset: int = 0,
+) -> list[TaskOut]:
+    stmt = (
+        select(Task)
+        .where(Task.workspace_id == principal.workspace.id)
+        .order_by(Task.created_at, Task.id)
+        .limit(min(limit, MAX_TASK_PAGE))
+        .offset(offset)
+    )
     if status is not None:
         stmt = stmt.where(Task.status == status)
     return [TaskOut.model_validate(t) for t in (await db.execute(stmt)).scalars().all()]
 
 
 async def create_task(db: AsyncSession, principal: Principal, payload: TaskIn) -> TaskOut:
+    payload = await scrub(db, principal, payload, ("title",))
     task = Task(
         workspace_id=principal.workspace.id,
         title=payload.title,
@@ -121,6 +181,7 @@ async def create_task(db: AsyncSession, principal: Principal, payload: TaskIn) -
 
 
 async def update_task(db: AsyncSession, principal: Principal, task_id: uuid.UUID, payload: TaskUpdate) -> TaskOut:
+    payload = await scrub(db, principal, payload, ("title",))
     task = await _get_task(db, principal, task_id)
     if payload.title is not None:
         task.title = payload.title
@@ -180,6 +241,7 @@ async def list_decisions(db: AsyncSession, principal: Principal, limit: int = 20
 
 
 async def create_decision(db: AsyncSession, principal: Principal, payload: DecisionIn) -> DecisionOut:
+    payload = await scrub(db, principal, payload, ("title", "reason", "related_files"))
     await _require_task_in_workspace(db, principal, payload.task_id)
     decision = Decision(
         workspace_id=principal.workspace.id,
@@ -259,6 +321,13 @@ async def get_handoff(db: AsyncSession, principal: Principal, handoff_id: uuid.U
 
 
 async def create_handoff(db: AsyncSession, principal: Principal, payload: HandoffIn) -> HandoffOut:
+    payload = await scrub(
+        db,
+        principal,
+        payload,
+        ("summary", "files_changed", "commands_run", "blockers", "next_action"),
+        widths={"summary": 8000, "files_changed": 8000, "commands_run": 8000, "blockers": 8000, "next_action": 2000},
+    )
     await _require_task_in_workspace(db, principal, payload.task_id)
     handoff = Handoff(
         workspace_id=principal.workspace.id,
@@ -350,6 +419,7 @@ async def update_presence(db: AsyncSession, principal: Principal, payload: Prese
     race. Heartbeats are ephemeral: their event is delivered live but not stored
     in the outbox, which would otherwise fill with one row per actor per beat.
     """
+    payload = await scrub(db, principal, payload, ("current_task", "current_file"))
     workspace = principal.workspace
     values = {
         "workspace_id": workspace.id,
@@ -455,4 +525,11 @@ async def summary(db: AsyncSession, principal: Principal) -> WorkspaceSummary:
         # Handoffs still needing a pickup (acknowledged ones are in flight).
         open_handoff_count=await count(Handoff, Handoff.status == HandoffStatus.open),
         active_developers=sorted(active),
+        active_claim_count=await _active_claims(db, principal),
     )
+
+
+async def _active_claims(db: AsyncSession, principal: Principal) -> int:
+    from app.services.claims import count_active  # claims imports this module
+
+    return await count_active(db, principal)

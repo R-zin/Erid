@@ -23,3 +23,7 @@ class Conflict(ServiceError):
 
 class Forbidden(ServiceError):
     status_code = 403
+
+
+class Unprocessable(ServiceError):
+    status_code = 422

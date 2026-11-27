@@ -1,0 +1,60 @@
+# Scale on load rather than CPU. Requires Prometheus scraping the API and
+# prometheus-adapter exposing these per-pod series as custom metrics, e.g.:
+#
+#   rules:
+#     - seriesQuery: 'erid_http_inflight_requests{namespace!="",pod!=""}'
+#       resources: {overrides: {namespace: {resource: namespace}, pod: {resource: pod}}}
+#       metricsQuery: 'avg_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+#     - seriesQuery: 'erid_websocket_connections{namespace!="",pod!=""}'
+#       resources: {overrides: {namespace: {resource: namespace}, pod: {resource: pod}}}
+#       metricsQuery: 'max_over_time(<<.Series>>{<<.LabelMatchers>>}[1m])'
+#
+# Apply this instead of base/api-hpa.yaml (same name, so it replaces it).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: erid
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Well under ERID_MAX_INFLIGHT_REQUESTS (200), so pods are added long
+    # before any starts shedding.
+    - type: Pods
+      pods:
+        metric:
+          name: erid_http_inflight_requests
+        target:
+          type: AverageValue
+          averageValue: "40"
+    - type: Pods
+      pods:
+        metric:
+          name: erid_websocket_connections
+        target:
+          type: AverageValue
+          averageValue: "500"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

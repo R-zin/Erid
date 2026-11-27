@@ -1,0 +1,27 @@
+# Non-secret API configuration. Secrets (DATABASE_URL, tokens, keys) live in
+# the erid-secrets Secret; see ../README.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: erid-config
+data:
+  ERID_ENV: production
+  ERID_ALLOW_OPEN_WORKSPACES: "0"
+  ERID_PUBLIC_WORKSPACE_DIRECTORY: "0"
+  # Migrations run at pod startup, serialized across pods by an advisory lock.
+  # Alternatively run ../optional/migrate-job.yaml per release and set this to "0".
+  ERID_RUN_MIGRATIONS: "1"
+  EVENT_BUS_BACKEND: postgres
+  # Connection budget: maxReplicas (8) x (pool 5 + overflow 5) + 8 listeners
+  # = 88, under Postgres' default max_connections of 100. To scale further,
+  # put PgBouncer in front (ERID_DB_PGBOUNCER=1 + ERID_DIRECT_DATABASE_URL).
+  ERID_DB_POOL_SIZE: "5"
+  ERID_DB_MAX_OVERFLOW: "5"
+  # Per-pod load shedding: answer 503 + Retry-After past this many concurrent
+  # requests, so a saturated pod sheds instead of timing out while the HPA
+  # adds pods.
+  ERID_MAX_INFLIGHT_REQUESTS: "200"
+  ERID_MAX_WEBSOCKETS: "2000"
+  # The ingress controller is the only client (see networkpolicy.yaml), so its
+  # X-Forwarded-For is trusted for the client address used by rate limits.
+  FORWARDED_ALLOW_IPS: "*"

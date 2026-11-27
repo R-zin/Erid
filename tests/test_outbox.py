@@ -280,7 +280,7 @@ async def test_pg_bus_end_to_end_with_oversize_event(client, monkeypatch):
     try:
         async with bus.subscribe(slug) as queue:
             await client.post(f"/api/workspaces/{slug}/decisions", json={"title": "small"})
-            big_reason = "x" * 20_000  # far past pg_notify's 8000-byte payload limit
+            big_reason = "x" * 12_000  # past pg_notify's 8000-byte payload limit, under the 16k field cap
             await client.post(f"/api/workspaces/{slug}/decisions", json={"title": "big", "reason": big_reason})
             small = await asyncio.wait_for(queue.get(), timeout=5)
             big = await asyncio.wait_for(queue.get(), timeout=5)

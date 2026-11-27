@@ -1,0 +1,29 @@
+# Erid on Kubernetes: kubectl apply -k deploy/k8s/base
+# (create the erid-secrets Secret first; see ../README.md)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: erid
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: erid
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - api-hpa.yaml
+  - api-pdb.yaml
+  - web-deployment.yaml
+  - web-service.yaml
+  - web-hpa.yaml
+  - web-pdb.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+images:
+  - name: erid-api
+    newName: ghcr.io/r-zin/erid-api
+    newTag: v0.1.0
+  - name: erid-web
+    newName: ghcr.io/r-zin/erid-web
+    newTag: v0.1.0

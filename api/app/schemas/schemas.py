@@ -2,7 +2,40 @@ import uuid
 from datetime import datetime
 
 from app.models.models import ActorRole, HandoffStatus, Permission, TaskStatus
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Column-backed limits: values longer than the database column must fail
+# validation (422) instead of reaching Postgres and failing there (500).
+MAX_NAME = 128  # String(128) columns: actor/author/assignee names
+MAX_TEXT = 16_000  # free-text fields (Text columns, bounded to keep rows sane)
+# Workspace slugs: what may be provisioned or implicitly created. Letters,
+# digits, ".", "_" and "-", starting with a letter or digit, up to 128 chars
+# (the column width). Rules out path tricks, spaces and unbounded lengths.
+SLUG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+
+def _reject_nul(value):
+    """Recursively refuse NUL characters: Postgres text can't store them (they
+    surfaced as 500s), and no legitimate field contains one."""
+    if isinstance(value, str):
+        if "\x00" in value:
+            raise ValueError("NUL characters are not allowed")
+    elif isinstance(value, dict):
+        for v in value.values():
+            _reject_nul(v)
+    elif isinstance(value, list | tuple):
+        for v in value:
+            _reject_nul(v)
+    return value
+
+
+class InputModel(BaseModel):
+    """Base for request bodies: rejects NUL characters anywhere in the payload."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_nul(cls, data):
+        return _reject_nul(data)
 
 
 class WorkspaceSummary(BaseModel):
@@ -13,6 +46,7 @@ class WorkspaceSummary(BaseModel):
     decision_count: int = 0
     open_handoff_count: int = 0
     active_developers: list[str] = Field(default_factory=list)
+    active_claim_count: int = 0
 
 
 class WorkspaceOut(BaseModel):
@@ -50,14 +84,14 @@ class WorkspaceKeyRotated(BaseModel):
     api_key: str | None
 
 
-class DecisionIn(BaseModel):
+class DecisionIn(InputModel):
     title: str = Field(min_length=1, max_length=512)
-    reason: str | None = None
-    related_files: str | None = None
+    reason: str | None = Field(default=None, max_length=MAX_TEXT)
+    related_files: str | None = Field(default=None, max_length=MAX_TEXT)
     # Ignored when authenticated with a per-actor key/token: the actor's own
     # name is recorded instead. Honoured for shared credentials (open
     # workspaces, the legacy workspace key), which identify no one in particular.
-    made_by: str | None = None
+    made_by: str | None = Field(default=None, max_length=MAX_NAME)
     task_id: uuid.UUID | None = None  # link this decision to a task
 
 
@@ -73,18 +107,18 @@ class DecisionOut(BaseModel):
     created_at: datetime
 
 
-class TaskIn(BaseModel):
+class TaskIn(InputModel):
     title: str = Field(min_length=1, max_length=512)
-    assigned_to: str | None = None
+    assigned_to: str | None = Field(default=None, max_length=MAX_NAME)
     # Same attribution rule as DecisionIn.made_by.
-    created_by: str | None = None
+    created_by: str | None = Field(default=None, max_length=MAX_NAME)
     status: TaskStatus = TaskStatus.todo
 
 
-class TaskUpdate(BaseModel):
+class TaskUpdate(InputModel):
     title: str | None = Field(default=None, min_length=1, max_length=512)
     status: TaskStatus | None = None
-    assigned_to: str | None = None
+    assigned_to: str | None = Field(default=None, max_length=MAX_NAME)
 
 
 class TaskOut(BaseModel):
@@ -104,7 +138,7 @@ class TaskOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class HandoffIn(BaseModel):
+class HandoffIn(InputModel):
     """Create a handoff. ``summary`` is required; everything else is optional
     context that helps the next session resume safely."""
 
@@ -142,11 +176,11 @@ class HandoffOut(BaseModel):
     resolved_by: str | None
 
 
-class PresenceIn(BaseModel):
-    actor_name: str = Field(min_length=1, max_length=128)
-    actor_type: str = "human"
-    current_file: str | None = None
-    current_task: str | None = None
+class PresenceIn(InputModel):
+    actor_name: str = Field(min_length=1, max_length=MAX_NAME)
+    actor_type: str = Field(default="human", min_length=1, max_length=32)
+    current_file: str | None = Field(default=None, max_length=512)
+    current_task: str | None = Field(default=None, max_length=512)
 
 
 class PresenceOut(BaseModel):
@@ -165,7 +199,7 @@ class PresenceOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class ActorIn(BaseModel):
+class ActorIn(InputModel):
     name: str = Field(min_length=1, max_length=128)
     role: ActorRole = ActorRole.writer
     permissions: list[Permission] | None = None  # defaults to the role's grants
@@ -189,10 +223,10 @@ class ActorToken(BaseModel):
     expires_in: int
 
 
-class TokenRequest(BaseModel):
+class TokenRequest(InputModel):
     """Login: exchange an actor (or legacy workspace) API key for a JWT."""
 
-    api_key: str = Field(min_length=1)
+    api_key: str = Field(min_length=1, max_length=512)
 
 
 class ActorCreated(ActorOut):
@@ -201,7 +235,7 @@ class ActorCreated(ActorOut):
     api_key: str | None
 
 
-class OAuthInviteIn(BaseModel):
+class OAuthInviteIn(InputModel):
     """Optional constraints on an OAuth invitation."""
 
     # When set, only a provider account whose *verified* email matches may redeem it.
@@ -226,3 +260,89 @@ class SearchResults(BaseModel):
     query: str
     decisions: list[DecisionOut]
     tasks: list[TaskOut]
+
+
+class AuditEventOut(BaseModel):
+    """One entry in a workspace's audit trail."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action: str
+    actor: str | None
+    target: str | None
+    outcome: str
+    client_ip: str | None
+    detail: dict | None
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# File claims (advisory leases)
+# ---------------------------------------------------------------------------
+
+MAX_CLAIM_PATHS = 50
+
+
+class ClaimIn(InputModel):
+    """Claim paths or globs before editing them. Re-claiming renews."""
+
+    paths: list[str] = Field(min_length=1, max_length=MAX_CLAIM_PATHS)
+    # How long the claim lasts unless renewed or released (1 min to 24 h).
+    ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
+    # Exclusive: nobody else may claim an overlapping path. Shared: others may
+    # hold shared claims too (e.g. several agents reading a module).
+    exclusive: bool = True
+    reason: str | None = Field(default=None, max_length=1000)
+    task_id: uuid.UUID | None = None
+    # Same attribution rule as DecisionIn.made_by.
+    holder: str | None = Field(default=None, max_length=MAX_NAME)
+
+
+class ClaimOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    path: str
+    holder: str
+    exclusive: bool
+    reason: str | None
+    task_id: uuid.UUID | None
+    created_at: datetime
+    expires_at: datetime
+
+
+class ClaimConflict(BaseModel):
+    """A requested path that overlaps claims held by someone else."""
+
+    path: str
+    held_by: list[ClaimOut]
+
+
+class ClaimResult(BaseModel):
+    ok: bool  # every requested path was granted
+    granted: list[ClaimOut]
+    conflicts: list[ClaimConflict]
+
+
+class ClaimCheckIn(InputModel):
+    paths: list[str] = Field(min_length=1, max_length=MAX_CLAIM_PATHS)
+    holder: str | None = Field(default=None, max_length=MAX_NAME)
+
+
+class ClaimCheck(BaseModel):
+    path: str
+    # True when a claim by someone else covers this path.
+    claimed_by_others: bool
+    claims: list[ClaimOut]
+
+
+class ReleaseIn(InputModel):
+    """Release your claims on these exact paths, or all of them when omitted."""
+
+    paths: list[str] | None = Field(default=None, max_length=MAX_CLAIM_PATHS)
+    holder: str | None = Field(default=None, max_length=MAX_NAME)
+
+
+class ReleaseResult(BaseModel):
+    released: list[uuid.UUID]

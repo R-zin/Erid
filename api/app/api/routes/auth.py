@@ -26,19 +26,21 @@ import uuid
 from typing import Literal
 from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import oauth
+from app.core.ratelimit import auth_rate_limit, client_ip
 from app.core.security import Principal, require_action
 from app.core.settings import settings
 from app.core.tokens import issue_token
 from app.db.session import get_db
 from app.models.models import Actor, ActorRole, OAuthIdentity, Permission, Workspace
 from app.schemas.schemas import OAuthInvite, OAuthInviteIn
+from app.services import audit
 from app.services.workspaces import get_or_create_workspace, get_workspace_by_slug
 
 router = APIRouter()
@@ -65,7 +67,7 @@ def _verify_invite_for(invite: str, slug: str) -> dict:
     return payload
 
 
-@router.get("/auth/{provider}/login", name="oauth_login")
+@router.get("/auth/{provider}/login", name="oauth_login", dependencies=[Depends(auth_rate_limit)])
 async def oauth_login(
     provider: str,
     slug: str = Query(min_length=1, max_length=128),
@@ -96,11 +98,12 @@ async def oauth_login(
     return RedirectResponse(url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
-@router.get("/auth/{provider}/callback", name="oauth_callback")
+@router.get("/auth/{provider}/callback", name="oauth_callback", dependencies=[Depends(auth_rate_limit)])
 async def oauth_callback(
     provider: str,
     code: str,
     state: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
     """Complete the flow: mint a JWT for the resolved actor and return to the SPA.
@@ -135,7 +138,21 @@ async def oauth_callback(
     actor = await _resolve_or_create_oauth_actor(db, provider, profile, slug, invite=invite)
     # ``sub`` is the actor's id, never its name: verification resolves by id
     # within the workspace, so a token can't alias a same-named actor.
-    token = issue_token(workspace_slug=slug, subject=str(actor.id), role=actor.role.value, name=actor.name)
+    token = issue_token(
+        workspace_slug=slug,
+        subject=str(actor.id),
+        role=actor.role.value,
+        name=actor.name,
+        workspace_id=str(actor.workspace_id),
+    )
+    await audit.record(
+        db,
+        "oauth.login",
+        slug=slug,
+        actor=actor.name,
+        ip=client_ip(request),
+        detail={"provider": provider, "workspace_id": str(actor.workspace_id)},
+    )
 
     # quote_via=quote (not quote_plus) keeps the JWT's [A-Za-z0-9._-] chars
     # literal in the fragment, so clients/tests can split it on "&" simply.
@@ -184,6 +201,14 @@ async def create_oauth_invite(
 
     email = (payload.email.strip().lower() or None) if payload and payload.email else None
     invite = oauth.make_invite(slug=workspace.slug, actor_id=str(actor.id), email=email)
+    await audit.record(
+        db,
+        "oauth.invite_created",
+        workspace=workspace,
+        actor=principal.actor_name,
+        target=actor.name,
+        detail={"email_pinned": email is not None},
+    )
     query = urlencode({"slug": workspace.slug, "invite": invite})
     return OAuthInvite(
         actor_id=actor.id,

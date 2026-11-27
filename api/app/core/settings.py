@@ -79,6 +79,71 @@ class Settings:
     # off on a shared deployment so one team can't enumerate another's slugs;
     # the listing then needs the admin token.
     public_workspace_directory: bool = field(default_factory=lambda: _env_flag("ERID_PUBLIC_WORKSPACE_DIRECTORY", True))
+    # Deployment mode. "production" (or "prod") turns configuration warnings
+    # into startup errors (see app.core.production) and disables silent
+    # fallbacks that are only safe for a single local instance.
+    env: str = field(default_factory=lambda: os.getenv("ERID_ENV", "development").strip().lower())
+    # Run Alembic "upgrade head" when the API starts. Safe with many replicas
+    # (an advisory lock serializes them), but on Kubernetes the migrate Job does
+    # it once per rollout and pods set this to 0 to start faster.
+    run_migrations: bool = field(default_factory=lambda: _env_flag("ERID_RUN_MIGRATIONS", True))
+    # SQLAlchemy connection pool, per API process. Budget it: replicas x
+    # (pool_size + max_overflow) + 1 listener each must stay under Postgres
+    # max_connections (default 100), or put PgBouncer in front.
+    db_pool_size: int = field(default_factory=lambda: int(os.getenv("ERID_DB_POOL_SIZE", "10")))
+    db_max_overflow: int = field(default_factory=lambda: int(os.getenv("ERID_DB_MAX_OVERFLOW", "10")))
+    db_pool_timeout: float = field(default_factory=lambda: float(os.getenv("ERID_DB_POOL_TIMEOUT", "10")))
+    db_pool_recycle: int = field(default_factory=lambda: int(os.getenv("ERID_DB_POOL_RECYCLE", "1800")))
+    # Direct (unpooled) Postgres URL for the two things a transaction-pooling
+    # PgBouncer breaks: the event bus's LISTEN connection and the migration
+    # advisory lock. Defaults to DATABASE_URL; set it when DATABASE_URL points
+    # at PgBouncer.
+    direct_database_url: str = field(
+        default_factory=lambda: (
+            os.getenv("ERID_DIRECT_DATABASE_URL") or os.getenv("DATABASE_URL", _database_url_default())
+        )
+    )
+    # Set when DATABASE_URL goes through PgBouncer in transaction mode:
+    # disables asyncpg's prepared-statement caches, which that mode can't hold.
+    db_pgbouncer: bool = field(default_factory=lambda: _env_flag("ERID_DB_PGBOUNCER", False))
+    # Load shedding, per API process. Past these, new HTTP requests get 503 +
+    # Retry-After and new WebSockets are refused with close code 1013, so an
+    # overloaded instance degrades cleanly while the autoscaler adds replicas
+    # instead of falling over. 0 disables a limit.
+    max_inflight_requests: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_INFLIGHT_REQUESTS", "256")))
+    max_websockets: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_WEBSOCKETS", "2000")))
+    # Rate limits ("<count>/<second|minute|hour>", count 0 disables one).
+    # auth: per client IP, shared by all replicas, on key->token login,
+    #   provisioning, claiming and OAuth.
+    # auth_failures: rejected credentials per client IP before it is locked
+    #   out for the rest of the window (shared).
+    # api: per workspace + credential, counted per replica (so the cluster-wide
+    #   ceiling is about replicas x this).
+    rate_limits_enabled: bool = field(default_factory=lambda: _env_flag("ERID_RATE_LIMITS", True))
+    rate_limit_auth: str = field(default_factory=lambda: os.getenv("ERID_RATE_LIMIT_AUTH", "30/minute"))
+    rate_limit_auth_failures: str = field(
+        default_factory=lambda: os.getenv("ERID_RATE_LIMIT_AUTH_FAILURES", "20/minute")
+    )
+    rate_limit_api: str = field(default_factory=lambda: os.getenv("ERID_RATE_LIMIT_API", "1200/minute"))
+    # Largest request body accepted, in bytes (413 beyond). Free-text fields
+    # are capped at 16k characters, so 1 MiB is generous.
+    max_body_bytes: int = field(default_factory=lambda: int(os.getenv("ERID_MAX_BODY_BYTES", str(1024 * 1024))))
+    # Serve the interactive API docs (/docs, /redoc, /openapi.json). On by
+    # default in development, off in production unless set to 1.
+    expose_docs: bool = field(
+        default_factory=lambda: _env_flag(
+            "ERID_EXPOSE_DOCS", os.getenv("ERID_ENV", "development").strip().lower() not in ("prod", "production")
+        )
+    )
+    # Secret scanning on writes: "redact" (default) replaces credentials found
+    # in task/decision/handoff/claim text with [REDACTED:<rule>]; "reject"
+    # refuses the write (422); "off" disables it. See app.core.secret_scan.
+    secret_scanning: str = field(default_factory=lambda: os.getenv("ERID_SECRET_SCANNING", "redact"))
+    # How long audit events are kept.
+    audit_retention_days: int = field(default_factory=lambda: int(os.getenv("ERID_AUDIT_RETENTION_DAYS", "90")))
+    # Optional bearer token protecting GET /metrics (Prometheus). Empty leaves
+    # it open; keep it off the public ingress either way.
+    metrics_token: str = field(default_factory=lambda: os.getenv("ERID_METRICS_TOKEN", ""))
     # Skip Alembic migrations on startup (create tables directly instead). Used
     # by tests and local SQLite; production should leave this unset.
     skip_migrations: bool = field(default_factory=lambda: os.getenv("ERID_SKIP_MIGRATIONS", "") == "1")
@@ -120,6 +185,10 @@ class Settings:
     # Directory path to built frontend SPA assets (web/dist). When present, FastAPI
     # serves the web dashboard alongside the REST/WS API routes.
     frontend_dist_dir: str = field(default_factory=lambda: os.getenv("FRONTEND_DIST_DIR", ""))
+
+    @property
+    def is_production(self) -> bool:
+        return self.env in ("prod", "production")
 
 
 settings = Settings()

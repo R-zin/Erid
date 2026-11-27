@@ -1,0 +1,57 @@
+# ingress-nginx + cert-manager. Replace erid.example.com with your domain.
+# /api and /mcp go to the API (REST, WebSocket stream, MCP); everything else to
+# the dashboard. /metrics, /ready and /docs are deliberately not routed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: erid
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # WebSocket streams stay open; heartbeats arrive every 30s.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Matches the API's own request body limit.
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+    # Coarse per-client-IP limit at the edge; the API applies finer limits.
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains";
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [erid.example.com]
+      secretName: erid-tls
+  rules:
+    - host: erid.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /mcp
+            pathType: Exact
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: api
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http

@@ -199,6 +199,39 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    async def claim_files(
+        self,
+        slug: str,
+        paths: list[str],
+        ttl_seconds: int = 3600,
+        exclusive: bool = True,
+        reason: str | None = None,
+        task_id: str | None = None,
+        holder: str | None = None,
+    ):
+        body = {"paths": paths, "ttl_seconds": ttl_seconds, "exclusive": exclusive}
+        body.update({k: v for k, v in {"reason": reason, "task_id": task_id, "holder": holder}.items() if v})
+        r = await self._client.post(self._url(slug, "/claims"), json=body)
+        r.raise_for_status()
+        return r.json()
+
+    async def release_files(self, slug: str, paths: list[str] | None = None, holder: str | None = None):
+        body = {k: v for k, v in {"paths": paths, "holder": holder}.items() if v is not None}
+        r = await self._client.post(self._url(slug, "/claims/release"), json=body)
+        r.raise_for_status()
+        return r.json()
+
+    async def list_claims(self, slug: str, path: str | None = None):
+        r = await self._client.get(self._url(slug, "/claims"), params={"path": path} if path else None)
+        r.raise_for_status()
+        return r.json()
+
+    async def check_files(self, slug: str, paths: list[str], holder: str | None = None):
+        body = {"paths": paths, **({"holder": holder} if holder else {})}
+        r = await self._client.post(self._url(slug, "/claims/check"), json=body)
+        r.raise_for_status()
+        return r.json()
+
     async def update_presence(
         self,
         slug: str,

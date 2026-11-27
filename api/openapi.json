@@ -149,9 +149,14 @@
         "title": "ActorToken",
         "type": "object"
       },
-      "DecisionIn": {
+      "AuditEventOut": {
+        "description": "One entry in a workspace's audit trail.",
         "properties": {
-          "made_by": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor": {
             "anyOf": [
               {
                 "type": "string"
@@ -160,7 +165,242 @@
                 "type": "null"
               }
             ],
-            "title": "Made By"
+            "title": "Actor"
+          },
+          "client_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Ip"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "actor",
+          "target",
+          "outcome",
+          "client_ip",
+          "detail",
+          "created_at"
+        ],
+        "title": "AuditEventOut",
+        "type": "object"
+      },
+      "ClaimCheck": {
+        "properties": {
+          "claimed_by_others": {
+            "title": "Claimed By Others",
+            "type": "boolean"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimOut"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "claimed_by_others",
+          "claims"
+        ],
+        "title": "ClaimCheck",
+        "type": "object"
+      },
+      "ClaimCheckIn": {
+        "properties": {
+          "holder": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holder"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "title": "ClaimCheckIn",
+        "type": "object"
+      },
+      "ClaimConflict": {
+        "description": "A requested path that overlaps claims held by someone else.",
+        "properties": {
+          "held_by": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimOut"
+            },
+            "title": "Held By",
+            "type": "array"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "held_by"
+        ],
+        "title": "ClaimConflict",
+        "type": "object"
+      },
+      "ClaimIn": {
+        "description": "Claim paths or globs before editing them. Re-claiming renews.",
+        "properties": {
+          "exclusive": {
+            "default": true,
+            "title": "Exclusive",
+            "type": "boolean"
+          },
+          "holder": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holder"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "ttl_seconds": {
+            "default": 3600,
+            "maximum": 86400.0,
+            "minimum": 60.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "title": "ClaimIn",
+        "type": "object"
+      },
+      "ClaimOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "exclusive": {
+            "title": "Exclusive",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "holder": {
+            "title": "Holder",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
           },
           "reason": {
             "anyOf": [
@@ -173,9 +413,91 @@
             ],
             "title": "Reason"
           },
+          "task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "holder",
+          "exclusive",
+          "reason",
+          "task_id",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "ClaimOut",
+        "type": "object"
+      },
+      "ClaimResult": {
+        "properties": {
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimConflict"
+            },
+            "title": "Conflicts",
+            "type": "array"
+          },
+          "granted": {
+            "items": {
+              "$ref": "#/components/schemas/ClaimOut"
+            },
+            "title": "Granted",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "granted",
+          "conflicts"
+        ],
+        "title": "ClaimResult",
+        "type": "object"
+      },
+      "DecisionIn": {
+        "properties": {
+          "made_by": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Made By"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
           "related_files": {
             "anyOf": [
               {
+                "maxLength": 16000,
                 "type": "string"
               },
               {
@@ -711,12 +1033,15 @@
           },
           "actor_type": {
             "default": "human",
+            "maxLength": 32,
+            "minLength": 1,
             "title": "Actor Type",
             "type": "string"
           },
           "current_file": {
             "anyOf": [
               {
+                "maxLength": 512,
                 "type": "string"
               },
               {
@@ -728,6 +1053,7 @@
           "current_task": {
             "anyOf": [
               {
+                "maxLength": 512,
                 "type": "string"
               },
               {
@@ -797,6 +1123,57 @@
         "title": "PresenceOut",
         "type": "object"
       },
+      "ReleaseIn": {
+        "description": "Release your claims on these exact paths, or all of them when omitted.",
+        "properties": {
+          "holder": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holder"
+          },
+          "paths": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paths"
+          }
+        },
+        "title": "ReleaseIn",
+        "type": "object"
+      },
+      "ReleaseResult": {
+        "properties": {
+          "released": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Released",
+            "type": "array"
+          }
+        },
+        "required": [
+          "released"
+        ],
+        "title": "ReleaseResult",
+        "type": "object"
+      },
       "SearchResults": {
         "properties": {
           "decisions": {
@@ -831,6 +1208,7 @@
           "assigned_to": {
             "anyOf": [
               {
+                "maxLength": 128,
                 "type": "string"
               },
               {
@@ -842,6 +1220,7 @@
           "created_by": {
             "anyOf": [
               {
+                "maxLength": 128,
                 "type": "string"
               },
               {
@@ -948,6 +1327,7 @@
           "assigned_to": {
             "anyOf": [
               {
+                "maxLength": 128,
                 "type": "string"
               },
               {
@@ -987,6 +1367,7 @@
         "description": "Login: exchange an actor (or legacy workspace) API key for a JWT.",
         "properties": {
           "api_key": {
+            "maxLength": 512,
             "minLength": 1,
             "title": "Api Key",
             "type": "string"
@@ -1164,6 +1545,11 @@
       },
       "WorkspaceSummary": {
         "properties": {
+          "active_claim_count": {
+            "default": 0,
+            "title": "Active Claim Count",
+            "type": "integer"
+          },
           "active_developers": {
             "items": {
               "type": "string"
@@ -1399,7 +1785,9 @@
             "name": "slug",
             "required": true,
             "schema": {
+              "maxLength": 128,
               "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
               "title": "Slug",
               "type": "string"
             }
@@ -1607,7 +1995,7 @@
     },
     "/api/workspaces/{slug}/actors/{actor_id}": {
       "delete": {
-        "description": "Revoke an actor (its keys and grants stop working).",
+        "description": "Revoke an actor (its keys, tokens and grants stop working).",
         "operationId": "delete_actor_api_workspaces__slug__actors__actor_id__delete",
         "parameters": [
           {
@@ -1740,6 +2128,438 @@
         "summary": "Create Oauth Invite",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/workspaces/{slug}/audit": {
+      "get": {
+        "description": "The workspace's audit trail, newest first (admins only).\n\nProvisioning, claiming, key rotation, actor changes, token issuance and\nrefusals, OAuth logins and invites, and rejected credentials.",
+        "operationId": "list_audit_events_api_workspaces__slug__audit_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEventOut"
+                  },
+                  "title": "Response List Audit Events Api Workspaces  Slug  Audit Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          },
+          {
+            "APIKeyQuery": []
+          },
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Audit Events",
+        "tags": [
+          "context"
+        ]
+      }
+    },
+    "/api/workspaces/{slug}/claims": {
+      "get": {
+        "description": "Active claims, optionally only those overlapping ``path``.",
+        "operationId": "list_claims_api_workspaces__slug__claims_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClaimOut"
+                  },
+                  "title": "Response List Claims Api Workspaces  Slug  Claims Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          },
+          {
+            "APIKeyQuery": []
+          },
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Claims",
+        "tags": [
+          "claims"
+        ]
+      },
+      "post": {
+        "description": "Claim paths before editing them. Non-conflicting paths are granted;\nconflicting ones come back under ``conflicts`` with who holds them.\nClaiming a path you already hold renews it.",
+        "operationId": "claim_files_api_workspaces__slug__claims_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          },
+          {
+            "APIKeyQuery": []
+          },
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Claim Files",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/workspaces/{slug}/claims/check": {
+      "post": {
+        "description": "For each path, the active claims covering it (claims nothing). Built for\npre-commit hooks: fail when ``claimed_by_others`` is true.",
+        "operationId": "check_claims_api_workspaces__slug__claims_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimCheckIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClaimCheck"
+                  },
+                  "title": "Response Check Claims Api Workspaces  Slug  Claims Check Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          },
+          {
+            "APIKeyQuery": []
+          },
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check Claims",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/workspaces/{slug}/claims/release": {
+      "post": {
+        "description": "Release your claims on ``paths``, or all your claims when omitted.",
+        "operationId": "release_claims_api_workspaces__slug__claims_release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          },
+          {
+            "APIKeyQuery": []
+          },
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Release Claims",
+        "tags": [
+          "claims"
+        ]
+      }
+    },
+    "/api/workspaces/{slug}/claims/{claim_id}": {
+      "delete": {
+        "description": "Release one claim: your own, or anyone's if you are an admin.",
+        "operationId": "release_claim_api_workspaces__slug__claims__claim_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "claim_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Claim Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          },
+          {
+            "APIKeyQuery": []
+          },
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Release Claim",
+        "tags": [
+          "claims"
         ]
       }
     },
@@ -2443,7 +3263,7 @@
     },
     "/api/workspaces/{slug}/rotate-key": {
       "post": {
-        "description": "Rotate the workspace key (owner only). Returns the new key once.",
+        "description": "Rotate the workspace key (owner only). Returns the new key once.\n\nTokens minted from the old key stop working immediately.",
         "operationId": "rotate_workspace_key_api_workspaces__slug__rotate_key_post",
         "parameters": [
           {
@@ -2514,6 +3334,7 @@
             "name": "q",
             "required": true,
             "schema": {
+              "maxLength": 1000,
               "minLength": 1,
               "title": "Q",
               "type": "string"
@@ -2670,6 +3491,7 @@
     },
     "/api/workspaces/{slug}/tasks": {
       "get": {
+        "description": "List tasks (oldest first), up to ``limit`` per page; page with ``offset``.",
         "operationId": "list_tasks_api_workspaces__slug__tasks_get",
         "parameters": [
           {
@@ -2695,6 +3517,30 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 1000000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],
@@ -3121,6 +3967,7 @@
     },
     "/health": {
       "get": {
+        "description": "Liveness: the process is up. Never touches dependencies (a DB blip must not restart pods).",
         "operationId": "health_health_get",
         "responses": {
           "200": {
@@ -3139,6 +3986,26 @@
           }
         },
         "summary": "Health",
+        "tags": [
+          "meta"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Readiness: the database answers and the event bus is connected (503 otherwise).",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready",
         "tags": [
           "meta"
         ]

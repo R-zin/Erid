@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from app.core.keys import generate_api_key, hash_api_key, key_matches
 from app.core.settings import settings
-from app.core.tokens import issue_token
+from app.core.tokens import issue_token, key_fingerprint
 from app.models.models import ROLE_GRANTS, Actor, ActorRole, Grant, Workspace
 from app.schemas.schemas import (
     ActorCreated,
@@ -162,7 +162,13 @@ async def exchange_key_for_token(db: AsyncSession, slug: str, raw_key: str) -> A
 
     if key_matches(raw_key, workspace.api_key_hash):
         # Legacy key acts as owner; its subject is the workspace slug.
-        token = issue_token(workspace_slug=slug, subject=workspace.slug, role=ActorRole.owner.value)
+        token = issue_token(
+            workspace_slug=slug,
+            subject=workspace.slug,
+            role=ActorRole.owner.value,
+            workspace_id=str(workspace.id),
+            key_fingerprint=key_fingerprint(workspace.api_key_hash),
+        )
     else:
         actor = (
             (
@@ -181,6 +187,12 @@ async def exchange_key_for_token(db: AsyncSession, slug: str, raw_key: str) -> A
         )
         if actor is None:
             raise Forbidden("invalid api key")
-        token = issue_token(workspace_slug=slug, subject=str(actor.id), role=actor.role.value, name=actor.name)
+        token = issue_token(
+            workspace_slug=slug,
+            subject=str(actor.id),
+            role=actor.role.value,
+            name=actor.name,
+            workspace_id=str(workspace.id),
+        )
 
     return ActorToken(access_token=token, expires_in=settings.jwt_ttl_seconds)

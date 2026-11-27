@@ -1,0 +1,43 @@
+# Run migrations once per release instead of at pod startup:
+#   kubectl -n erid delete job erid-migrate --ignore-not-found
+#   kubectl -n erid apply -f deploy/k8s/optional/migrate-job.yaml
+#   kubectl -n erid wait --for=condition=complete job/erid-migrate --timeout=5m
+# then set ERID_RUN_MIGRATIONS: "0" in the ConfigMap. Pin the same image tag
+# as the Deployment.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: erid-migrate
+  namespace: erid
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: ghcr.io/r-zin/erid-api:v0.1.0
+          command: ["python", "-m", "app.migrate"]
+          envFrom:
+            - configMapRef:
+                name: erid-config
+            - secretRef:
+                name: erid-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
